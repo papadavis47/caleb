@@ -5,6 +5,11 @@
 //! their memory, and `Drop` frees it when a `Session` goes out of scope —
 //! so there is nothing to free by hand and no allocator to thread through.
 
+use crate::markdown;
+use crate::storage;
+use std::path::Path;
+use thiserror::Error;
+
 /// Tasks are short notes, capped so rendering never needs to wrap.
 pub const MAX_TASK_BYTES: usize = 150;
 
@@ -79,6 +84,40 @@ pub fn truncate_on_char_boundary(s: &str, max: usize) -> &str {
     &s[..end]
 }
 
+/// Rust note: `#[from]` generates the `From` impls that make `?` convert an
+/// `io::Error` or a `ParseError` into a `LoadError` automatically. This is
+/// the Rust counterpart to Zig's merged error sets (`A || B`).
+#[derive(Debug, Error)]
+#[allow(dead_code)]
+pub enum LoadError {
+    #[error("cannot read session file: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("cannot parse session file: {0}")]
+    Parse(#[from] markdown::ParseError),
+}
+
+#[derive(Debug, Error)]
+#[allow(dead_code)]
+pub enum SaveError {
+    #[error("cannot write session file: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+/// Build an empty session with a unique filename in `dir`. Nothing is
+/// written until the first `save`.
+#[allow(dead_code)]
+pub fn create_new(dir: &Path, ts: Timestamp) -> std::io::Result<Session> {
+    let stem = storage::format_file_stem(ts);
+    let filename = storage::unique_filename(dir, &stem, storage::FILE_EXTENSION)?;
+    Ok(Session {
+        filename,
+        timestamp: Some(ts),
+        active: Vec::new(),
+        completed: Vec::new(),
+        dirty: false,
+    })
+}
+
 #[allow(dead_code)]
 impl Session {
     pub fn tasks(&self, pane: Pane) -> &[Task] {
@@ -146,6 +185,27 @@ impl Session {
         }
         list.swap(a, b);
         self.dirty = true;
+    }
+
+    /// Read and parse `filename` from `dir`.
+    pub fn load(dir: &Path, filename: &str) -> Result<Session, LoadError> {
+        let contents = std::fs::read_to_string(dir.join(filename))?;
+        let parsed = markdown::parse(&contents)?;
+        Ok(Session {
+            filename: filename.to_string(),
+            timestamp: parsed.timestamp,
+            active: parsed.active,
+            completed: parsed.completed,
+            dirty: false,
+        })
+    }
+
+    /// Serialize and overwrite the on-disk file, clearing `dirty`.
+    pub fn save(&mut self, dir: &Path) -> Result<(), SaveError> {
+        let data = markdown::serialize(self.timestamp, &self.active, &self.completed);
+        std::fs::write(dir.join(&self.filename), data)?;
+        self.dirty = false;
+        Ok(())
     }
 }
 
@@ -252,5 +312,68 @@ mod tests {
     fn pane_other_flips() {
         assert_eq!(Pane::Active.other(), Pane::Completed);
         assert_eq!(Pane::Completed.other(), Pane::Active);
+    }
+
+    #[test]
+    fn create_new_picks_a_name_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let ts = Timestamp {
+            year: 2026,
+            month: 5,
+            day: 31,
+            hour: 14,
+            minute: 30,
+        };
+        let s = create_new(dir.path(), ts).unwrap();
+        assert_eq!(s.filename, "2026-05-31_14-30.md");
+        assert!(!s.dirty);
+        // Nothing on disk until the first save.
+        assert!(!dir.path().join(&s.filename).exists());
+    }
+
+    #[test]
+    fn save_then_load_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let ts = Timestamp {
+            year: 2026,
+            month: 5,
+            day: 31,
+            hour: 14,
+            minute: 30,
+        };
+        let mut orig = create_new(dir.path(), ts).unwrap();
+        orig.add(Pane::Active, "first");
+        orig.add(Pane::Active, "second");
+        orig.add(Pane::Completed, "done");
+        orig.save(dir.path()).unwrap();
+        assert!(!orig.dirty);
+
+        let loaded = Session::load(dir.path(), &orig.filename).unwrap();
+        assert_eq!(loaded.active.len(), 2);
+        assert_eq!(loaded.completed.len(), 1);
+        assert_eq!(loaded.active[0].text, "first");
+        assert_eq!(loaded.completed[0].text, "done");
+        assert_eq!(loaded.timestamp.unwrap().year, 2026);
+        assert!(!loaded.dirty);
+    }
+
+    #[test]
+    fn load_propagates_parse_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad = format!("- [ ] {}\n", "x".repeat(MAX_TASK_BYTES + 1));
+        std::fs::write(dir.path().join("bad.md"), bad).unwrap();
+        assert!(matches!(
+            Session::load(dir.path(), "bad.md"),
+            Err(LoadError::Parse(_))
+        ));
+    }
+
+    #[test]
+    fn load_missing_file_is_an_io_error() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            Session::load(dir.path(), "nope.md"),
+            Err(LoadError::Io(_))
+        ));
     }
 }
