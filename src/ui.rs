@@ -7,7 +7,7 @@
 
 use crate::session::{Pane, Task, Timestamp};
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, List, ListItem, ListState, Padding};
@@ -114,14 +114,7 @@ pub fn draw(frame: &mut Frame, state: &ViewState) -> PaneRects {
     let area = frame.area();
 
     if area.height < MIN_ROWS || area.width < MIN_COLS {
-        // Right-aligned: on an extremely narrow terminal (the message is 25
-        // cols; MIN_COLS only guarantees 30), left alignment would clip the
-        // tail ("small") off first. Right alignment clips the "caleb: "
-        // branding first instead, keeping the actual diagnosis on screen.
-        frame.render_widget(
-            Line::from("caleb: terminal too small").alignment(Alignment::Right),
-            area,
-        );
+        frame.render_widget(Line::from("caleb: terminal too small"), area);
         return PaneRects::default();
     }
 
@@ -318,8 +311,14 @@ mod tests {
 
     #[test]
     fn too_small_terminal_shows_fallback() {
-        let buf = render(20, 4, &base(&[], &[]));
+        let buf = render(40, 4, &base(&[], &[]));
         assert!(row(&buf, 0).contains("terminal too small"));
+    }
+
+    #[test]
+    fn too_small_terminal_left_clips_when_narrow() {
+        let buf = render(20, 4, &base(&[], &[]));
+        assert!(row(&buf, 0).starts_with("caleb: terminal too"));
     }
 
     #[test]
