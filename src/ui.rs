@@ -10,7 +10,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, List, ListItem, ListState, Padding};
+use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, ListState, Padding, Paragraph};
 
 /// Below this, draw only a "terminal too small" message.
 #[allow(dead_code)]
@@ -263,8 +263,109 @@ fn draw_status_bar(frame: &mut Frame, _state: &ViewState, area: Rect) {
     );
 }
 
-fn draw_input_bar(_f: &mut Frame, _s: &ViewState, _buf: &str, _a: Rect) {}
-fn draw_help_overlay(_f: &mut Frame, _s: &ViewState, _a: Rect) {}
+/// Key reference shown by `?`. Each line is padded to 52 columns so the box
+/// has a straight right edge.
+pub const HELP_LINES: &[&str] = &[
+    " caleb — key reference                              ",
+    "                                                    ",
+    " Navigation                                         ",
+    "   j / ↓        next task in focused pane           ",
+    "   k / ↑        prev task in focused pane           ",
+    "   h / ← →/ l   switch pane                         ",
+    "   g / G        top / bottom of pane                ",
+    "                                                    ",
+    " Editing                                            ",
+    "   a            add task (input at the bottom)      ",
+    "   d            delete selected task                ",
+    "   space / x    toggle done (moves task)            ",
+    "   Shift+J / K  move task down / up                 ",
+    "                                                    ",
+    " Mouse                                              ",
+    "   click        select task / focus pane            ",
+    "   double click toggle done                         ",
+    "   wheel        scroll focused pane                 ",
+    "                                                    ",
+    " App                                                ",
+    "   s            save                                ",
+    "   q            quit (auto-saves)                   ",
+    "   ?            this help                           ",
+    "   Esc          dismiss / cancel                    ",
+];
+
+const HELP_INNER_W: u16 = 52;
+
+/// Three-row bordered field with a one-row spacer underneath:
+///
+/// ```text
+/// row rows-3   ╭─ Add task ──...──╮
+/// row rows-2   │ > <buf>_<padding>│
+/// row rows-1   ╰──────...─────────╯
+/// row rows     (blank, clears tmux/powerline overlay bars)
+/// ```
+fn draw_input_bar(frame: &mut Frame, state: &ViewState, buf: &str, area: Rect) {
+    let field = Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: 3,
+    };
+
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(state.palette.accent))
+        .title("─ Add task ");
+
+    let inner = block.inner(field);
+    frame.render_widget(block, field);
+
+    // Truncate from the left so the caret stays visible on long input.
+    let room = inner.width.saturating_sub(3) as usize; // " > " and "_"
+    let shown = if buf.len() > room {
+        crate::session::truncate_on_char_boundary(&buf[buf.len() - room..], room)
+    } else {
+        buf
+    };
+
+    frame.render_widget(
+        Line::from(vec![
+            Span::styled(" > ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(shown),
+            Span::raw("_"),
+        ]),
+        inner,
+    );
+}
+
+/// Centered, with one row of vertical and one column of horizontal padding
+/// between the text and the border.
+fn draw_help_overlay(frame: &mut Frame, state: &ViewState, area: Rect) {
+    let box_w = HELP_INNER_W + 2 + 2; // padding + borders
+    let box_h = HELP_LINES.len() as u16 + 2 + 2;
+
+    // Needs a 1-cell margin on every side.
+    if area.width < box_w + 2 || area.height < box_h + 2 {
+        return;
+    }
+
+    let rect = Rect {
+        x: area.x + (area.width - box_w) / 2,
+        y: area.y + (area.height - box_h) / 2,
+        width: box_w,
+        height: box_h,
+    };
+
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(state.palette.help))
+        .padding(Padding::uniform(1));
+
+    let lines: Vec<Line> = HELP_LINES.iter().map(|l| Line::from(*l)).collect();
+
+    // `Clear` blanks the cells first so the panes underneath do not show
+    // through the overlay.
+    frame.render_widget(Clear, rect);
+    frame.render_widget(Paragraph::new(lines).block(block), rect);
+}
 
 #[cfg(test)]
 mod tests {
@@ -433,5 +534,62 @@ mod tests {
         // A 10-row terminal: 1 header + 1 status = 8 pane rows, 6 inner.
         assert_eq!(visible_tasks(8), 3);
         assert_eq!(visible_tasks(2), 0);
+    }
+
+    #[test]
+    fn input_overlay_draws_a_bordered_field() {
+        let mut s = base(&[], &[]);
+        s.overlay = Overlay::Input("hi");
+        let buf = render(40, 10, &s);
+        // 10 rows, 0-indexed: header 0, panes 1..=5, field 6/7/8, blank 9.
+        // The pane bottom border sits on row 5 — ava's `rows - 4` in
+        // 1-indexed terms.
+        assert!(row(&buf, 5).starts_with('╰'));
+        assert!(row(&buf, 6).starts_with("╭─ Add task "));
+        assert!(row(&buf, 7).contains("> hi_"));
+        assert!(row(&buf, 8).starts_with('╰'));
+        assert_eq!(row(&buf, 9).trim(), "");
+    }
+
+    #[test]
+    fn input_overlay_hides_the_status_bar() {
+        let mut s = base(&[], &[]);
+        s.overlay = Overlay::Input("");
+        let buf = render(40, 12, &s);
+        for y in 0..12 {
+            assert!(!row(&buf, y).contains("a add  d delete"));
+        }
+    }
+
+    #[test]
+    fn input_field_uses_the_accent_color() {
+        let mut s = base(&[], &[]);
+        s.overlay = Overlay::Input("x");
+        let buf = render(40, 10, &s);
+        // Field top-left corner: row 6, column 0.
+        assert_eq!(buf[(0u16, 6u16)].fg, Color::Indexed(141));
+    }
+
+    #[test]
+    fn help_overlay_is_centered_and_orchid() {
+        let mut s = base(&[], &[]);
+        s.overlay = Overlay::Help;
+        let buf = render(80, 40, &s);
+        let joined: String = (0..40).map(|y| row(&buf, y)).collect();
+        assert!(joined.contains("caleb — key reference"));
+        assert!(joined.contains("Mouse"));
+        // Box is 56 wide (52 inner + 2 padding + 2 border) and 28 tall
+        // (24 lines + 2 padding + 2 border). On an 80x40 screen it centers
+        // at column (80-56)/2 = 12, row (40-28)/2 = 6.
+        assert_eq!(buf[(12u16, 6u16)].fg, Color::Indexed(177));
+    }
+
+    #[test]
+    fn help_overlay_is_skipped_when_it_cannot_fit() {
+        let mut s = base(&[], &[]);
+        s.overlay = Overlay::Help;
+        let buf = render(40, 10, &s);
+        let joined: String = (0..10).map(|y| row(&buf, y)).collect();
+        assert!(!joined.contains("key reference"));
     }
 }
