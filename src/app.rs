@@ -103,6 +103,8 @@ impl App {
                 let len = self.session.tasks(self.focused).len();
                 *self.cursor_mut() = len.saturating_sub(1);
             }
+            // `Session::toggle`/`delete` no-op on an out-of-range index, so
+            // there is no bounds check to duplicate here.
             KeyCode::Char(' ') | KeyCode::Char('x') => {
                 let (pane, cursor) = (self.focused, *self.cursor_mut());
                 self.session.toggle(pane, cursor);
@@ -411,6 +413,34 @@ mod tests {
     }
 
     #[test]
+    fn multibyte_char_is_rejected_whole_at_the_byte_cap() {
+        let mut app = app_with(&[]);
+        press(&mut app, 'a');
+        for _ in 0..149 {
+            press(&mut app, 'x');
+        }
+        assert_eq!(app.input.len(), 149);
+        // 'é' is 2 bytes: 149 + 2 = 151 > 150, so it must be rejected whole —
+        // never admitted as a single truncated byte.
+        press(&mut app, 'é');
+        assert_eq!(app.input.len(), 149);
+        assert!(!app.input.ends_with('é'));
+    }
+
+    #[test]
+    fn multibyte_char_fits_exactly_at_the_byte_cap() {
+        let mut app = app_with(&[]);
+        press(&mut app, 'a');
+        for _ in 0..148 {
+            press(&mut app, 'x');
+        }
+        // 148 + 2 = 150 == MAX_TASK_BYTES, so it must be accepted.
+        press(&mut app, 'é');
+        assert_eq!(app.input.len(), crate::session::MAX_TASK_BYTES);
+        assert!(app.input.ends_with('é'));
+    }
+
+    #[test]
     fn shift_j_swaps_with_the_next_task() {
         let mut app = app_with(&["first", "second"]);
         press(&mut app, 'J');
@@ -465,10 +495,14 @@ mod tests {
     #[test]
     fn scroll_clamp_never_passes_the_end() {
         let mut app = app_with(&["a", "b", "c", "d"]);
+        app.active_cursor = 2;
         app.active_scroll = 99;
-        app.active_cursor = 0;
+        // Pane 8 rows tall -> 6 inner rows -> 3 visible tasks, so the
+        // furthest valid offset is len - visible = 1. A wrong max_scroll
+        // formula leaves the cursor-visibility clamp's value of 2 in place
+        // and fails here.
         app.adjust_scroll(8);
-        assert_eq!(app.active_scroll, 0);
+        assert_eq!(app.active_scroll, 1);
     }
 
     #[test]
