@@ -6,9 +6,20 @@
 
 use crate::session::{MAX_TASK_BYTES, Pane, SaveError, Session};
 use crate::ui::{self, Overlay, Palette, PaneRects, ViewState};
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// Two clicks on the same task within this window count as a double-click.
+pub const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+
+/// What a screen coordinate resolves to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum Hit {
+    Task { pane: Pane, index: usize },
+    Pane(Pane),
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
@@ -235,6 +246,140 @@ impl App {
             visible,
         );
     }
+
+    /// Resolve a screen coordinate against the last frame's pane geometry.
+    ///
+    /// The 2-row stride makes the arithmetic fall out for free: integer
+    /// division maps a spacer row and the content row beneath it to the same
+    /// index, so clicking either selects the task they belong to.
+    pub fn hit_test(&self, col: u16, row: u16) -> Option<Hit> {
+        let (pane, rect) = if contains(self.pane_rects.active, col, row) {
+            (Pane::Active, self.pane_rects.active)
+        } else if contains(self.pane_rects.completed, col, row) {
+            (Pane::Completed, self.pane_rects.completed)
+        } else {
+            return None;
+        };
+
+        // Inside the borders?
+        let top = rect.y + 1;
+        let bottom = rect.y + rect.height - 1;
+        if row < top || row >= bottom || col == rect.x || col == rect.x + rect.width - 1 {
+            return Some(Hit::Pane(pane));
+        }
+
+        let scroll = match pane {
+            Pane::Active => self.active_scroll,
+            Pane::Completed => self.completed_scroll,
+        };
+        let row_offset = (row - top) as usize;
+        let index = scroll + row_offset / ui::ROW_STRIDE as usize;
+
+        if index < self.session.tasks(pane).len() {
+            Some(Hit::Task { pane, index })
+        } else {
+            Some(Hit::Pane(pane))
+        }
+    }
+
+    /// Dispatch a mouse event. `now` is injected so double-click timing is
+    /// testable without sleeping.
+    pub fn handle_mouse(&mut self, event: MouseEvent, now: Instant) {
+        // The add-task field owns the screen while it is open.
+        if self.mode == Mode::AddInput {
+            return;
+        }
+        if self.mode == Mode::Help {
+            if matches!(event.kind, MouseEventKind::Down(_)) {
+                self.mode = Mode::Normal;
+            }
+            return;
+        }
+
+        match event.kind {
+            MouseEventKind::ScrollUp => self.scroll_focused(-1),
+            MouseEventKind::ScrollDown => self.scroll_focused(1),
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.handle_click(event.column, event.row, now)
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_click(&mut self, col: u16, row: u16, now: Instant) {
+        let Some(hit) = self.hit_test(col, row) else {
+            return;
+        };
+
+        match hit {
+            Hit::Pane(pane) => {
+                self.focused = pane;
+                self.last_click = None;
+            }
+            Hit::Task { pane, index } => {
+                // `Instant` subtraction panics on a negative result; a
+                // monotonic clock makes that unreachable here, but
+                // `saturating_duration_since` states the intent for free.
+                let is_double = self.last_click.is_some_and(|(t, p, i)| {
+                    p == pane && i == index && now.saturating_duration_since(t) <= DOUBLE_CLICK
+                });
+
+                self.focused = pane;
+                match pane {
+                    Pane::Active => self.active_cursor = index,
+                    Pane::Completed => self.completed_cursor = index,
+                }
+
+                if is_double {
+                    self.session.toggle(pane, index);
+                    self.clamp_cursors();
+                    self.last_click = None;
+                } else {
+                    self.last_click = Some((now, pane, index));
+                }
+            }
+        }
+    }
+
+    fn scroll_focused(&mut self, delta: isize) {
+        let scroll = match self.focused {
+            Pane::Active => &mut self.active_scroll,
+            Pane::Completed => &mut self.completed_scroll,
+        };
+        if delta > 0 {
+            *scroll += 1; // bounded by clamp_scroll_only on the next frame
+        } else if *scroll > 0 {
+            *scroll -= 1;
+        }
+    }
+}
+
+#[allow(dead_code)] // wired up by the event loop in Task 9
+impl App {
+    /// Bound scroll offsets without dragging them back to the cursor — used
+    /// after a wheel event, where the cursor deliberately stays put.
+    pub fn clamp_scroll_only(&mut self, pane_height: u16) {
+        let visible = ui::visible_tasks(pane_height);
+        let max = |len: usize| {
+            if visible == 0 || len <= visible {
+                0
+            } else {
+                len - visible
+            }
+        };
+        self.active_scroll = self.active_scroll.min(max(self.session.active.len()));
+        self.completed_scroll = self.completed_scroll.min(max(self.session.completed.len()));
+    }
+}
+
+/// Whether a screen coordinate falls inside a pane's rendered rectangle.
+fn contains(rect: ratatui::layout::Rect, col: u16, row: u16) -> bool {
+    rect.width > 0
+        && rect.height > 0
+        && col >= rect.x
+        && col < rect.x + rect.width
+        && row >= rect.y
+        && row < rect.y + rect.height
 }
 
 fn clamp_pane(scroll: &mut usize, cursor: usize, len: usize, visible: usize) {
@@ -260,6 +405,9 @@ fn clamp_pane(scroll: &mut usize, cursor: usize, len: usize, visible: usize) {
 mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::layout::Rect;
+    use std::time::Duration;
 
     fn app_with(tasks: &[&str]) -> App {
         let mut session = Session {
@@ -514,5 +662,211 @@ mod tests {
         app.session.active.clear();
         app.clamp_cursors();
         assert_eq!(app.active_cursor, 0);
+    }
+
+    fn app_with_layout(active: &[&str], completed: &[&str]) -> App {
+        let mut app = app_with(active);
+        for t in completed {
+            app.session.add(Pane::Completed, t);
+        }
+        app.session.dirty = false;
+        // Mirrors a 40x10 frame: panes occupy rows 1..=8, 20 cols each.
+        app.pane_rects = PaneRects {
+            active: Rect {
+                x: 0,
+                y: 1,
+                width: 20,
+                height: 8,
+            },
+            completed: Rect {
+                x: 20,
+                y: 1,
+                width: 20,
+                height: 8,
+            },
+        };
+        app
+    }
+
+    fn click(kind: MouseEventKind, col: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    fn down(col: u16, row: u16) -> MouseEvent {
+        click(MouseEventKind::Down(MouseButton::Left), col, row)
+    }
+
+    #[test]
+    fn hit_test_finds_a_task_on_its_content_row() {
+        let app = app_with_layout(&["a", "b"], &[]);
+        // Pane top border row 1, inner rows 2..=7. Task 0 content is row 3.
+        assert_eq!(
+            app.hit_test(5, 3),
+            Some(Hit::Task {
+                pane: Pane::Active,
+                index: 0
+            })
+        );
+        assert_eq!(
+            app.hit_test(5, 5),
+            Some(Hit::Task {
+                pane: Pane::Active,
+                index: 1
+            })
+        );
+    }
+
+    #[test]
+    fn hit_test_maps_a_spacer_row_to_its_task() {
+        let app = app_with_layout(&["a", "b"], &[]);
+        // Row 2 is the spacer above task 0; row 4 the spacer above task 1.
+        assert_eq!(
+            app.hit_test(5, 2),
+            Some(Hit::Task {
+                pane: Pane::Active,
+                index: 0
+            })
+        );
+        assert_eq!(
+            app.hit_test(5, 4),
+            Some(Hit::Task {
+                pane: Pane::Active,
+                index: 1
+            })
+        );
+    }
+
+    #[test]
+    fn hit_test_past_the_end_is_a_pane_hit() {
+        let app = app_with_layout(&["a"], &[]);
+        assert_eq!(app.hit_test(5, 7), Some(Hit::Pane(Pane::Active)));
+    }
+
+    #[test]
+    fn hit_test_resolves_the_right_pane() {
+        let app = app_with_layout(&[], &["done"]);
+        assert_eq!(
+            app.hit_test(25, 3),
+            Some(Hit::Task {
+                pane: Pane::Completed,
+                index: 0
+            })
+        );
+    }
+
+    #[test]
+    fn hit_test_on_a_border_is_a_pane_hit() {
+        let app = app_with_layout(&["a"], &[]);
+        assert_eq!(app.hit_test(0, 1), Some(Hit::Pane(Pane::Active)));
+    }
+
+    #[test]
+    fn hit_test_outside_every_pane_is_none() {
+        let app = app_with_layout(&["a"], &[]);
+        assert_eq!(app.hit_test(5, 0), None); // header
+        assert_eq!(app.hit_test(5, 9), None); // status bar
+    }
+
+    #[test]
+    fn hit_test_accounts_for_scroll() {
+        let mut app = app_with_layout(&["a", "b", "c", "d", "e"], &[]);
+        app.active_scroll = 2;
+        assert_eq!(
+            app.hit_test(5, 3),
+            Some(Hit::Task {
+                pane: Pane::Active,
+                index: 2
+            })
+        );
+    }
+
+    #[test]
+    fn click_selects_a_task_and_moves_focus() {
+        let mut app = app_with_layout(&["a"], &["done"]);
+        let t0 = Instant::now();
+        app.handle_mouse(down(25, 3), t0);
+        assert_eq!(app.focused, Pane::Completed);
+        assert_eq!(app.completed_cursor, 0);
+    }
+
+    #[test]
+    fn click_on_empty_pane_area_only_moves_focus() {
+        let mut app = app_with_layout(&["a"], &[]);
+        app.active_cursor = 0;
+        let t0 = Instant::now();
+        app.handle_mouse(down(25, 5), t0);
+        assert_eq!(app.focused, Pane::Completed);
+        assert_eq!(app.completed_cursor, 0);
+    }
+
+    #[test]
+    fn double_click_toggles_the_task() {
+        let mut app = app_with_layout(&["thing"], &[]);
+        let t0 = Instant::now();
+        app.handle_mouse(down(5, 3), t0);
+        app.handle_mouse(down(5, 3), t0 + Duration::from_millis(200));
+        assert!(app.session.active.is_empty());
+        assert_eq!(app.session.completed.len(), 1);
+    }
+
+    #[test]
+    fn slow_second_click_does_not_toggle() {
+        let mut app = app_with_layout(&["thing"], &[]);
+        let t0 = Instant::now();
+        app.handle_mouse(down(5, 3), t0);
+        app.handle_mouse(down(5, 3), t0 + Duration::from_millis(900));
+        assert_eq!(app.session.active.len(), 1);
+    }
+
+    #[test]
+    fn second_click_on_a_different_task_does_not_toggle() {
+        let mut app = app_with_layout(&["a", "b"], &[]);
+        let t0 = Instant::now();
+        app.handle_mouse(down(5, 3), t0);
+        app.handle_mouse(down(5, 5), t0 + Duration::from_millis(100));
+        assert_eq!(app.session.active.len(), 2);
+        assert_eq!(app.active_cursor, 1);
+    }
+
+    #[test]
+    fn wheel_scrolls_the_focused_pane_without_moving_the_cursor() {
+        let mut app = app_with_layout(&["a", "b", "c", "d", "e", "f"], &[]);
+        let t0 = Instant::now();
+        app.handle_mouse(click(MouseEventKind::ScrollDown, 5, 3), t0);
+        assert_eq!(app.active_scroll, 1);
+        assert_eq!(app.active_cursor, 0);
+        app.handle_mouse(click(MouseEventKind::ScrollUp, 5, 3), t0);
+        assert_eq!(app.active_scroll, 0);
+    }
+
+    #[test]
+    fn mouse_is_ignored_in_add_mode() {
+        let mut app = app_with_layout(&["a"], &[]);
+        app.mode = Mode::AddInput;
+        let t0 = Instant::now();
+        app.handle_mouse(down(25, 3), t0);
+        assert_eq!(app.focused, Pane::Active);
+    }
+
+    #[test]
+    fn click_dismisses_the_help_overlay() {
+        let mut app = app_with_layout(&["a"], &[]);
+        app.mode = Mode::Help;
+        let t0 = Instant::now();
+        app.handle_mouse(down(5, 3), t0);
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn mouse_up_does_not_trigger_selection() {
+        let mut app = app_with_layout(&["a"], &["done"]);
+        let t0 = Instant::now();
+        app.handle_mouse(click(MouseEventKind::Up(MouseButton::Left), 25, 3), t0);
+        assert_eq!(app.focused, Pane::Active);
     }
 }
