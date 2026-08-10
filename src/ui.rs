@@ -322,7 +322,10 @@ fn draw_input_bar(frame: &mut Frame, state: &ViewState, buf: &str, area: Rect) {
     // Rust note: `buf.len() - room` is a byte offset, and slicing a &str at
     // an offset inside a multi-byte character panics. Walking forward to the
     // next char boundary keeps the slice valid and never exceeds `room`.
-    let room = inner.width.saturating_sub(3) as usize; // " > " and "_"
+    // 4 reserved columns: " > " (3) plus the trailing "_" caret (1). Using 3
+    // here left no room for the caret, so it silently fell off the right
+    // edge whenever `shown` filled the full budget.
+    let room = inner.width.saturating_sub(4) as usize;
     let shown = if buf.len() > room {
         let mut start = buf.len() - room;
         while start < buf.len() && !buf.is_char_boundary(start) {
@@ -602,18 +605,24 @@ mod tests {
 
     #[test]
     fn input_overflow_scrolls_without_splitting_multibyte_chars() {
-        // Sweep the alignment of a 2-byte character across the truncation
-        // point — at least one of these offsets lands mid-character, which is
-        // what used to panic.
-        for pad in 0..8 {
-            let text = format!("{}é trailing text", "x".repeat(40 + pad));
+        // room = inner_width - 4 = (40 - 2) - 4 = 34 visible bytes, and the
+        // truncation point is buf.len() - room. Growing the tail by one byte
+        // slides that point one byte further past the 'é', so this sweep walks
+        // it straight through the middle of the character — the case that used
+        // to panic. (It lands mid-character exactly at tail == 33.)
+        for tail in 30..40 {
+            let text = format!("{}é{}", "x".repeat(20), "y".repeat(tail));
             let mut s = base(&[], &[]);
             s.overlay = Overlay::Input(&text);
             let buf = render(40, 10, &s);
             let content = row(&buf, 7);
             assert!(
-                content.contains("trailing text_"),
-                "pad={pad}: caret and tail should stay visible, got {content:?}"
+                content.contains('_'),
+                "tail={tail}: caret should stay visible, got {content:?}"
+            );
+            assert!(
+                !content.contains('\u{fffd}'),
+                "tail={tail}: truncation split a character, got {content:?}"
             );
         }
     }
