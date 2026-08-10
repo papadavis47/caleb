@@ -482,6 +482,7 @@ Everything caleb does differently, in one place. Each is deliberate.
 | 6 | Help overlay gains a `Mouse` section | Documents divergence 1 |
 | 7 | Terminal restore via `Drop` + panic hook | `Drop` is Rust's `defer`; the panic hook covers a case ava cannot |
 | 8 | Rendering is diffed, not full-repaint | ratatui diffs by design; `AGENTS.md:203` notes ava chose full repaint deliberately, but this is invisible to the user |
+| 9 | Add-task input scrolls to keep the caret visible | ava truncates from the right (`render.zig:421-426`), freezing the display once input overflows the field, so newly typed characters never appear. caleb scrolls the view instead. Confirmed with the user after review surfaced the difference. |
 
 Everything else — layout, palette, glyphs, key bindings, file format,
 filenames, picker behavior, CLI surface, exit codes — matches ava.
