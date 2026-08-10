@@ -10,12 +10,10 @@ use crossterm::execute;
 use ratatui::DefaultTerminal;
 use std::io::{IsTerminal, stdout};
 
-#[allow(dead_code)] // constructed by `main` in Task 11
 pub struct Tui {
     terminal: DefaultTerminal,
 }
 
-#[allow(dead_code)]
 impl Tui {
     /// Enter raw mode + alternate screen (via `ratatui::init`, which also
     /// installs a panic hook that restores the terminal before printing),
@@ -41,13 +39,11 @@ impl Drop for Tui {
 }
 
 /// caleb needs an interactive terminal on both ends.
-#[allow(dead_code)] // called by `main` in Task 11
 pub fn is_tty() -> bool {
     std::io::stdin().is_terminal() && stdout().is_terminal()
 }
 
 /// NO_COLOR — any non-empty value disables color. See https://no-color.org.
-#[allow(dead_code)] // called by `main` in Task 11
 pub fn color_enabled() -> bool {
     match std::env::var("NO_COLOR") {
         Ok(v) => v.is_empty(),

@@ -27,7 +27,6 @@ pub struct Task {
 /// forces every read to handle the `None` case, so a missing header cannot
 /// silently become a zero date.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub struct Timestamp {
     pub year: u16,
     pub month: u8,
@@ -72,7 +71,6 @@ pub struct Session {
 /// UTF-8 character in half and print mojibake. Rust's `&str` is guaranteed
 /// valid UTF-8, so slicing mid-character would panic instead — the type
 /// system forces us to get this right.
-#[allow(dead_code)]
 pub fn truncate_on_char_boundary(s: &str, max: usize) -> &str {
     if s.len() <= max {
         return s;
@@ -88,7 +86,6 @@ pub fn truncate_on_char_boundary(s: &str, max: usize) -> &str {
 /// `io::Error` or a `ParseError` into a `LoadError` automatically. This is
 /// the Rust counterpart to Zig's merged error sets (`A || B`).
 #[derive(Debug, Error)]
-#[allow(dead_code)]
 pub enum LoadError {
     #[error("cannot read session file: {0}")]
     Io(#[from] std::io::Error),
@@ -97,7 +94,6 @@ pub enum LoadError {
 }
 
 #[derive(Debug, Error)]
-#[allow(dead_code)]
 pub enum SaveError {
     #[error("cannot write session file: {0}")]
     Io(#[from] std::io::Error),
@@ -105,7 +101,6 @@ pub enum SaveError {
 
 /// Build an empty session with a unique filename in `dir`. Nothing is
 /// written until the first `save`.
-#[allow(dead_code)]
 pub fn create_new(dir: &Path, ts: Timestamp) -> std::io::Result<Session> {
     let stem = storage::format_file_stem(ts);
     let filename = storage::unique_filename(dir, &stem, storage::FILE_EXTENSION)?;
@@ -118,7 +113,6 @@ pub fn create_new(dir: &Path, ts: Timestamp) -> std::io::Result<Session> {
     })
 }
 
-#[allow(dead_code)]
 impl Session {
     pub fn tasks(&self, pane: Pane) -> &[Task] {
         match pane {

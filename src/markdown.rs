@@ -6,14 +6,12 @@ use crate::session::{MAX_TASK_BYTES, Task, Timestamp};
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum ParseError {
     #[error("task text exceeds {MAX_TASK_BYTES} bytes")]
     LineTooLong,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
-#[allow(dead_code)]
 pub struct Parsed {
     pub timestamp: Option<Timestamp>,
     pub active: Vec<Task>,
@@ -21,14 +19,12 @@ pub struct Parsed {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 enum Section {
     None,
     Active,
     Completed,
 }
 
-#[allow(dead_code)]
 pub fn parse(source: &str) -> Result<Parsed, ParseError> {
     let mut result = Parsed::default();
     let mut section = Section::None;
@@ -76,7 +72,6 @@ pub fn parse(source: &str) -> Result<Parsed, ParseError> {
 /// Rust note: this returns `Option`, not `Result` — a bad header is not an
 /// error, it just means "no timestamp". The `?` operator on `Option` makes
 /// each failed check bail out to `None` with no nesting.
-#[allow(dead_code)]
 fn parse_header(line: &str) -> Option<Timestamp> {
     let rest = line.strip_prefix("# Session ")?;
     if rest.len() != 16 {
@@ -104,7 +99,6 @@ fn parse_header(line: &str) -> Option<Timestamp> {
     Some(ts)
 }
 
-#[allow(dead_code)]
 fn parse_task_line(line: &str) -> Option<(&str, bool)> {
     if let Some(text) = line.strip_prefix("- [ ] ") {
         return Some((text, false));
@@ -115,7 +109,6 @@ fn parse_task_line(line: &str) -> Option<(&str, bool)> {
     None
 }
 
-#[allow(dead_code)]
 pub fn serialize(timestamp: Option<Timestamp>, active: &[Task], completed: &[Task]) -> String {
     use std::fmt::Write;
     let mut out = String::new();

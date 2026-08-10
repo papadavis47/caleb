@@ -16,21 +16,18 @@ pub const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 
 /// What a screen coordinate resolves to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum Hit {
     Task { pane: Pane, index: usize },
     Pane(Pane),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum Mode {
     Normal,
     AddInput,
     Help,
 }
 
-#[allow(dead_code)]
 pub struct App {
     pub session: Session,
     pub storage_dir: PathBuf,
@@ -48,7 +45,6 @@ pub struct App {
     pub last_click: Option<(Instant, Pane, usize)>,
 }
 
-#[allow(dead_code)]
 impl App {
     pub fn new(session: Session, storage_dir: PathBuf, palette: Palette) -> Self {
         Self {
@@ -355,7 +351,6 @@ impl App {
     }
 }
 
-#[allow(dead_code)] // reachable only from `App::run`, which `main` wires in Task 11
 impl App {
     /// Draw, wait for an event, dispatch, repeat. Auto-saves on the way out.
     pub fn run(&mut self, tui: &mut Tui) -> anyhow::Result<()> {

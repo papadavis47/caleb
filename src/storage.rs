@@ -9,11 +9,9 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 pub const DEFAULT_SUBDIR: &str = "caleb";
-#[allow(dead_code)]
 pub const FILE_EXTENSION: &str = ".md";
 
 #[derive(Debug, Error, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum ResolveError {
     #[error("neither $XDG_DATA_HOME nor $HOME is set")]
     NoStorageDir,
@@ -21,7 +19,6 @@ pub enum ResolveError {
 
 /// Follows XDG: `$XDG_DATA_HOME/caleb`, else `$HOME/.local/share/caleb`.
 /// An empty string counts as unset.
-#[allow(dead_code)]
 pub fn resolve_storage_dir(xdg: Option<&str>, home: Option<&str>) -> Result<PathBuf, ResolveError> {
     if let Some(x) = xdg.filter(|s| !s.is_empty()) {
         return Ok(Path::new(x).join(DEFAULT_SUBDIR));
@@ -35,7 +32,6 @@ pub fn resolve_storage_dir(xdg: Option<&str>, home: Option<&str>) -> Result<Path
     Err(ResolveError::NoStorageDir)
 }
 
-#[allow(dead_code)]
 pub fn default_storage_dir() -> Result<PathBuf, ResolveError> {
     let xdg = std::env::var("XDG_DATA_HOME").ok();
     let home = std::env::var("HOME").ok();
@@ -44,6 +40,10 @@ pub fn default_storage_dir() -> Result<PathBuf, ResolveError> {
 
 /// Convert UTC Unix seconds into wall-clock fields. Negative input clamps
 /// to the epoch — the only sane fallback for a clock behind 1970.
+///
+/// Nothing in the binary calls this: `timestamp_now` goes through the local
+/// zone instead. It stays because it is the deterministic, seconds-in /
+/// fields-out core that the conversion tests can actually pin down.
 #[allow(dead_code)]
 pub fn timestamp_from_unix_seconds(secs: i64) -> Timestamp {
     let secs = secs.max(0);
@@ -57,7 +57,6 @@ pub fn timestamp_from_unix_seconds(secs: i64) -> Timestamp {
 /// Local wall-clock now. jiff reads the system zone (`$TZ`, then
 /// `/etc/localtime`) itself, in pure Rust — this one call replaces ava's
 /// 289-line hand-written TZif parser.
-#[allow(dead_code)]
 pub fn timestamp_now() -> Timestamp {
     from_civil(jiff::Zoned::now().datetime())
 }
@@ -72,7 +71,6 @@ fn from_civil(dt: jiff::civil::DateTime) -> Timestamp {
     }
 }
 
-#[allow(dead_code)]
 pub fn format_file_stem(ts: Timestamp) -> String {
     format!(
         "{:04}-{:02}-{:02}_{:02}-{:02}",
@@ -85,7 +83,6 @@ pub fn format_file_stem(ts: Timestamp) -> String {
 ///
 /// This is check-then-create. For a single-user local CLI that is fine; a
 /// concurrent writer could race in between, but that is not caleb's model.
-#[allow(dead_code)]
 pub fn unique_filename(dir: &Path, stem: &str, ext: &str) -> std::io::Result<String> {
     let candidate = format!("{stem}{ext}");
     if !dir.join(&candidate).exists() {

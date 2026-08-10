@@ -13,23 +13,18 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, ListState, Padding, Paragraph};
 
 /// Below this, draw only a "terminal too small" message.
-#[allow(dead_code)]
 pub const MIN_ROWS: u16 = 8;
-#[allow(dead_code)]
 pub const MIN_COLS: u16 = 30;
 
 /// Rows each task occupies: one blank spacer plus one content row, so items
 /// read as visually separated.
-#[allow(dead_code)]
 pub const ROW_STRIDE: u16 = 2;
 
-#[allow(dead_code)]
 const STATUS_TEXT: &str = " a add  d delete  space toggle  J/K move  s save  q quit  ? help";
 
 /// 256-color palette for chrome. Kept in one place so retuning the look is a
 /// one-line change per slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub struct Palette {
     pub accent: Color,
     pub muted: Color,
@@ -38,7 +33,6 @@ pub struct Palette {
     pub color_enabled: bool,
 }
 
-#[allow(dead_code)]
 impl Palette {
     /// When color is disabled, every slot becomes `Color::Reset` — but
     /// callers keep applying BOLD/DIM/REVERSED/CROSSED_OUT, which are
@@ -69,7 +63,6 @@ impl Palette {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum Overlay<'a> {
     None,
     Input(&'a str),
@@ -78,7 +71,6 @@ pub enum Overlay<'a> {
 
 /// Everything the renderer needs. It never mutates this.
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
 pub struct ViewState<'a> {
     pub timestamp: Option<Timestamp>,
     pub active: &'a [Task],
@@ -96,20 +88,17 @@ pub struct ViewState<'a> {
 /// Where the panes landed this frame, so mouse events can be hit-tested
 /// against the same geometry the user is looking at.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[allow(dead_code)]
 pub struct PaneRects {
     pub active: Rect,
     pub completed: Rect,
 }
 
 /// How many tasks fit in a pane of `pane_height` rows (borders included).
-#[allow(dead_code)]
 pub fn visible_tasks(pane_height: u16) -> usize {
     let inner = pane_height.saturating_sub(2);
     (inner / ROW_STRIDE) as usize
 }
 
-#[allow(dead_code)]
 pub fn draw(frame: &mut Frame, state: &ViewState) -> PaneRects {
     let area = frame.area();
 
