@@ -1,3 +1,4 @@
+mod app;
 mod markdown;
 mod session;
 mod storage;
