@@ -319,9 +319,16 @@ fn draw_input_bar(frame: &mut Frame, state: &ViewState, buf: &str, area: Rect) {
     frame.render_widget(block, field);
 
     // Truncate from the left so the caret stays visible on long input.
+    // Rust note: `buf.len() - room` is a byte offset, and slicing a &str at
+    // an offset inside a multi-byte character panics. Walking forward to the
+    // next char boundary keeps the slice valid and never exceeds `room`.
     let room = inner.width.saturating_sub(3) as usize; // " > " and "_"
     let shown = if buf.len() > room {
-        crate::session::truncate_on_char_boundary(&buf[buf.len() - room..], room)
+        let mut start = buf.len() - room;
+        while start < buf.len() && !buf.is_char_boundary(start) {
+            start += 1;
+        }
+        &buf[start..]
     } else {
         buf
     };
@@ -591,5 +598,23 @@ mod tests {
         let buf = render(40, 10, &s);
         let joined: String = (0..10).map(|y| row(&buf, y)).collect();
         assert!(!joined.contains("key reference"));
+    }
+
+    #[test]
+    fn input_overflow_scrolls_without_splitting_multibyte_chars() {
+        // Sweep the alignment of a 2-byte character across the truncation
+        // point — at least one of these offsets lands mid-character, which is
+        // what used to panic.
+        for pad in 0..8 {
+            let text = format!("{}é trailing text", "x".repeat(40 + pad));
+            let mut s = base(&[], &[]);
+            s.overlay = Overlay::Input(&text);
+            let buf = render(40, 10, &s);
+            let content = row(&buf, 7);
+            assert!(
+                content.contains("trailing text_"),
+                "pad={pad}: caret and tail should stay visible, got {content:?}"
+            );
+        }
     }
 }
