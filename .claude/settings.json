@@ -1,0 +1,44 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build*)",
+      "Bash(cargo check*)",
+      "Bash(cargo test*)",
+      "Bash(cargo fmt*)",
+      "Bash(cargo clippy*)",
+      "Bash(cargo tree*)",
+      "Bash(git status*)",
+      "Bash(git log*)",
+      "Bash(git diff*)",
+      "Bash(git show*)",
+      "Bash(git branch*)",
+      "Bash(git rev-parse*)",
+      "Bash(git merge-base*)",
+      "Bash(git check-ignore*)",
+      "Bash(git stash list*)",
+      "Bash(git ls-files*)",
+      "Bash(git add*)",
+      "Bash(git commit*)",
+      "Bash(git checkout*)",
+      "Bash(git restore*)",
+      "Bash(/home/papa/.claude/plugins/cache/claude-plugins-official/superpowers/*)",
+      "Bash(cd /home/papa/priority-projects/rust/caleb && *)",
+      "Bash(XDG_DATA_HOME=/tmp/*)",
+      "Bash(python3 scripts/smoke.py*)"
+    ],
+    "deny": [
+      "Bash(git push*)",
+      "Bash(git reset --hard*)",
+      "Bash(git clean*)",
+      "Bash(git rebase*)",
+      "Bash(git filter-branch*)",
+      "Bash(rm -rf /*)",
+      "Bash(rm -rf ~*)",
+      "Bash(sudo*)",
+      "Bash(*curl*| sh*)",
+      "Bash(*curl*| bash*)",
+      "Edit(/home/papa/priority-projects/zig/ava/**)",
+      "Write(/home/papa/priority-projects/zig/ava/**)"
+    ]
+  }
+}
