@@ -5,8 +5,9 @@
 //! testable without a pty.
 
 use crate::session::{MAX_TASK_BYTES, Pane, SaveError, Session};
+use crate::tui::Tui;
 use crate::ui::{self, Overlay, Palette, PaneRects, ViewState};
-use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -354,8 +355,44 @@ impl App {
     }
 }
 
-#[allow(dead_code)] // wired up by the event loop in Task 9
+#[allow(dead_code)] // reachable only from `App::run`, which `main` wires in Task 11
 impl App {
+    /// Draw, wait for an event, dispatch, repeat. Auto-saves on the way out.
+    pub fn run(&mut self, tui: &mut Tui) -> anyhow::Result<()> {
+        while !self.quit {
+            let mut rects = self.pane_rects;
+            tui.terminal().draw(|frame| {
+                rects = ui::draw(frame, &self.view_state());
+            })?;
+            self.pane_rects = rects;
+
+            // Pane geometry from the frame just drawn — the same rows the
+            // user is looking at when the next event arrives.
+            let pane_height = self.pane_rects.active.height;
+
+            match event::read()? {
+                Event::Key(key) if key.kind == event::KeyEventKind::Press => {
+                    // Press-only: terminals that also report releases would
+                    // otherwise run every binding twice.
+                    self.handle_key(key)?;
+                    self.adjust_scroll(pane_height);
+                }
+                Event::Mouse(m) => {
+                    self.handle_mouse(m, Instant::now());
+                    self.clamp_scroll_only(pane_height);
+                }
+                // Resize needs no work — the next draw reads the new size.
+                _ => {}
+            }
+        }
+
+        if self.session.dirty {
+            let dir = self.storage_dir.clone();
+            self.session.save(&dir)?;
+        }
+        Ok(())
+    }
+
     /// Bound scroll offsets without dragging them back to the cursor — used
     /// after a wheel event, where the cursor deliberately stays put.
     pub fn clamp_scroll_only(&mut self, pane_height: u16) {
