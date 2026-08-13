@@ -1,9 +1,8 @@
 //! Domain types for a coding session.
 //!
-//! Rust note: ava's Zig `Session` carried an `allocator` field and every
-//! `Task` needed an explicit `deinit`. Here `String` and `Vec<Task>` own
-//! their memory, and `Drop` frees it when a `Session` goes out of scope —
-//! so there is nothing to free by hand and no allocator to thread through.
+//! Rust note: `String` and `Vec<Task>` own their memory, and `Drop` frees it
+//! when a `Session` goes out of scope — so there is nothing to free by hand
+//! and no allocator to thread through the API.
 
 use crate::markdown;
 use crate::storage;
@@ -23,9 +22,9 @@ pub struct Task {
 /// Wall-clock time at minute granularity — all we need for filenames and
 /// the markdown header.
 ///
-/// Rust note: `Option<Timestamp>` replaces Zig's `?Timestamp`. The compiler
-/// forces every read to handle the `None` case, so a missing header cannot
-/// silently become a zero date.
+/// Rust note: an absent timestamp is `Option<Timestamp>`, never a sentinel
+/// value. The compiler forces every read to handle the `None` case, so a
+/// missing header cannot silently become a zero date.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Timestamp {
     pub year: u16,
@@ -67,10 +66,10 @@ pub struct Session {
 /// Longest prefix of `s` that fits in `max` bytes without splitting a
 /// character.
 ///
-/// Rust note: ava sliced at exactly 150 bytes, which can cut a multi-byte
-/// UTF-8 character in half and print mojibake. Rust's `&str` is guaranteed
-/// valid UTF-8, so slicing mid-character would panic instead — the type
-/// system forces us to get this right.
+/// Rust note: slicing at exactly `max` bytes would cut a multi-byte UTF-8
+/// character in half. Rust's `&str` is guaranteed valid UTF-8, so that slice
+/// panics rather than printing mojibake — the type system forces us to walk
+/// back to a boundary.
 pub fn truncate_on_char_boundary(s: &str, max: usize) -> &str {
     if s.len() <= max {
         return s;
@@ -83,8 +82,8 @@ pub fn truncate_on_char_boundary(s: &str, max: usize) -> &str {
 }
 
 /// Rust note: `#[from]` generates the `From` impls that make `?` convert an
-/// `io::Error` or a `ParseError` into a `LoadError` automatically. This is
-/// the Rust counterpart to Zig's merged error sets (`A || B`).
+/// `io::Error` or a `ParseError` into a `LoadError` automatically, so callers
+/// see one typed error instead of two.
 #[derive(Debug, Error)]
 pub enum LoadError {
     #[error("cannot read session file: {0}")]
@@ -152,10 +151,9 @@ impl Session {
     /// Move the task at `index` to the end of the other pane, flipping
     /// `done`.
     ///
-    /// Rust note: ava's version returns an error and hand-rolls a rollback,
-    /// because Zig's `append` can fail on allocation. `Vec::push` aborts on
-    /// OOM rather than returning, so that entire failure branch disappears —
-    /// this function cannot fail.
+    /// Rust note: `Vec::push` aborts on OOM rather than returning an error,
+    /// so there is no allocation-failure branch to roll back — this function
+    /// cannot fail and needs no `Result`.
     pub fn toggle(&mut self, from: Pane, index: usize) {
         let src = self.tasks_mut(from);
         if index >= src.len() {

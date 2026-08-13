@@ -1,9 +1,9 @@
 //! Frame rendering: a pure function from `ViewState` to a ratatui buffer.
 //!
-//! Rust/ratatui note: ava wrote ANSI escapes by hand and repainted the whole
-//! screen every frame. ratatui draws into a cell buffer and diffs it against
-//! the previous frame, sending only changed cells. The visible result is the
-//! same; the plumbing is gone.
+//! Rust/ratatui note: nothing here writes ANSI escapes. ratatui draws into a
+//! cell buffer and diffs it against the previous frame, sending only changed
+//! cells — which is also why tests can assert against a `TestBackend` buffer
+//! instead of a real terminal.
 
 use crate::session::{Pane, Task, Timestamp};
 use ratatui::Frame;
@@ -173,8 +173,7 @@ fn draw_header(frame: &mut Frame, state: &ViewState, area: Rect) {
 }
 
 fn draw_panes(frame: &mut Frame, state: &ViewState, area: Rect) -> PaneRects {
-    // Left gets floor(width/2); the odd column lands in the right pane,
-    // matching ava's `cols / 2` + remainder split exactly.
+    // Left gets floor(width/2); the odd column lands in the right pane.
     let [left, right] =
         Layout::horizontal([Constraint::Length(area.width / 2), Constraint::Min(0)]).areas(area);
 
@@ -215,8 +214,8 @@ fn draw_pane(frame: &mut Frame, state: &ViewState, area: Rect, pane: Pane) {
     // separates adjacent items.
     //
     // Styling is applied per-Line rather than via `List::highlight_style`,
-    // which would paint the spacer row too and give a 2-row highlight where
-    // ava has 1.
+    // which would paint the spacer row too and give a 2-row highlight instead
+    // of 1.
     let items: Vec<ListItem> = tasks
         .iter()
         .enumerate()
@@ -447,7 +446,7 @@ mod tests {
     }
 
     #[test]
-    fn pane_borders_carry_ava_titles() {
+    fn pane_borders_carry_rounded_titles() {
         let buf = render(40, 10, &base(&[], &[]));
         assert_eq!(row(&buf, 1), "╭─ Active ─────────╮╭─ Completed ──────╮");
     }
@@ -490,7 +489,7 @@ mod tests {
     }
 
     #[test]
-    fn status_bar_matches_ava() {
+    fn status_bar_lists_every_binding() {
         let buf = render(70, 10, &base(&[], &[]));
         assert_eq!(
             row(&buf, 9).trim_end(),
@@ -541,8 +540,7 @@ mod tests {
         s.overlay = Overlay::Input("hi");
         let buf = render(40, 10, &s);
         // 10 rows, 0-indexed: header 0, panes 1..=5, field 6/7/8, blank 9.
-        // The pane bottom border sits on row 5 — ava's `rows - 4` in
-        // 1-indexed terms.
+        // The pane bottom border sits on row 5.
         assert!(row(&buf, 5).starts_with('╰'));
         assert!(row(&buf, 6).starts_with("╭─ Add task "));
         assert!(row(&buf, 7).contains("> hi_"));

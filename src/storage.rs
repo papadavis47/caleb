@@ -55,8 +55,8 @@ pub fn timestamp_from_unix_seconds(secs: i64) -> Timestamp {
 }
 
 /// Local wall-clock now. jiff reads the system zone (`$TZ`, then
-/// `/etc/localtime`) itself, in pure Rust — this one call replaces ava's
-/// 289-line hand-written TZif parser.
+/// `/etc/localtime`) itself, in pure Rust — no hand-written TZif parsing and
+/// no libc dependency.
 pub fn timestamp_now() -> Timestamp {
     from_civil(jiff::Zoned::now().datetime())
 }

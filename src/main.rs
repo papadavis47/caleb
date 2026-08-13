@@ -19,7 +19,7 @@ use std::path::Path;
     name = "caleb",
     version,
     about = "Track tasks for a coding session",
-    // ava used -v for version; clap defaults to -V.
+    // caleb wants -v for version; clap defaults to -V, so wire it by hand.
     disable_version_flag = true
 )]
 struct Cli {

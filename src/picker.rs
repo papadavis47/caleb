@@ -12,7 +12,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
-/// First row occupied by a session entry, matching ava's picker layout.
+/// First screen row occupied by a session entry; the 2-row header sits above.
 const FIRST_ROW: u16 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,9 +78,9 @@ pub fn scan(dir: &Path) -> std::io::Result<Vec<Entry>> {
 
 /// Sessions with unfinished work, unless `show_all`.
 ///
-/// Rust note: ava had to stable-partition its array in place and re-sort,
-/// because Zig needed to return a contiguous slice. Returning a `Vec` of
-/// references makes this two lines and leaves the input untouched.
+/// Rust note: returning a `Vec<&Entry>` borrows instead of copying and leaves
+/// the input untouched — no in-place partition, and the borrow checker proves
+/// the entries outlive the filtered view.
 pub fn filter_visible(entries: &[Entry], show_all: bool) -> Vec<&Entry> {
     entries.iter().filter(|e| show_all || e.open > 0).collect()
 }
@@ -241,7 +241,7 @@ fn draw(frame: &mut Frame, visible: &[&Entry], cursor: usize, show_all: bool, pa
         frame.render_stateful_widget(List::new(items), body, &mut state);
     }
 
-    let _ = palette; // picker chrome is monochrome, as in ava
+    let _ = palette; // picker chrome is monochrome
     frame.render_widget(
         Line::from(" j/k move   Enter open   a show all   Esc cancel")
             .style(Style::default().add_modifier(Modifier::DIM)),

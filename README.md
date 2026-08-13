@@ -1,6 +1,6 @@
 # caleb
 
-A Rust port of `ava`, named for Caleb Smith in
+Named for Caleb Smith in
 [Ex Machina](<https://en.wikipedia.org/wiki/Ex_Machina_(film)>) — A film by
 Alex Garland.
 

@@ -1,9 +1,8 @@
 //! Terminal lifecycle: raw mode, alternate screen, mouse capture.
 //!
-//! Rust note: ava paired every `Terminal.init` with a manual
-//! `defer term.restore()`. Here `Drop` runs the teardown automatically when
-//! `Tui` goes out of scope — including on an early `return` or a `?`
-//! propagation, which is exactly what `defer` bought, without the discipline.
+//! Rust note: `Drop` runs the teardown automatically when `Tui` goes out of
+//! scope — including on an early `return`, a `?` propagation, or a panic. The
+//! terminal is restored without a cleanup call on every exit path.
 
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;

@@ -155,9 +155,9 @@ impl App {
                 self.clamp_cursors();
             }
             KeyCode::Backspace => {
-                // Rust note: `pop` removes a whole `char`, so multi-byte
-                // characters come off in one press. ava had to walk back
-                // over UTF-8 continuation bytes by hand.
+                // Rust note: `String::pop` removes a whole `char`, so a
+                // multi-byte character comes off in one press — no walking
+                // back over UTF-8 continuation bytes by hand.
                 self.input.pop();
             }
             // Control characters never reach the buffer, and the cap

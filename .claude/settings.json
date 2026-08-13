@@ -36,9 +36,7 @@
       "Bash(rm -rf ~*)",
       "Bash(sudo*)",
       "Bash(*curl*| sh*)",
-      "Bash(*curl*| bash*)",
-      "Edit(/home/papa/priority-projects/zig/ava/**)",
-      "Write(/home/papa/priority-projects/zig/ava/**)"
+      "Bash(*curl*| bash*)"
     ]
   }
 }

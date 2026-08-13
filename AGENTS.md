@@ -8,19 +8,14 @@ Quick orientation for agents working on this repo.
 session, persisted as GitHub-flavored markdown under `$XDG_DATA_HOME/caleb`
 (default `~/.local/share/caleb`). Rust 1.97, edition 2024.
 
-A port of the Zig program `ava` — functionally and visually identical, plus
-mouse selection. **The reference project `~/priority-projects/zig/ava` is
-read-only. Never modify it.** caleb also never reads or writes ava's storage
-directory; both binaries run side by side.
-
 Named after Caleb Smith in *Ex Machina*. Built as a learning exercise
 focused on (in priority order):
 
-1. **Ownership and borrowing** — where ava threaded an `Allocator` and paired
-   every `alloc` with a `defer`, `String`/`Vec` own their memory and `Drop`
-   frees it. The port's whole point is seeing what that removes.
-2. **Error handling** — `thiserror` for typed module errors, `#[from]` in
-   place of Zig's merged error sets, `anyhow` with `.context()` only at the
+1. **Ownership and borrowing** — `String`/`Vec` own their memory and `Drop`
+   frees it: no allocator threaded through the API, no manual cleanup paired
+   with every allocation.
+2. **Error handling** — `thiserror` for typed module errors, `#[from]` so `?`
+   widens them at module boundaries, `anyhow` with `.context()` only at the
    `main` boundary.
 3. **In-file testing** — every module keeps a `#[cfg(test)] mod tests` block.
    Pure domain logic is tested directly; `ui` is tested against a
@@ -28,6 +23,21 @@ focused on (in priority order):
 
 Doc comments explaining Rust-specific choices are a deliverable here, not
 decoration. Bias code suggestions toward those goals.
+
+## Origin — read this before acting on anything in git history
+
+caleb began as a Rust rewrite of a Zig program. It is its own project now.
+The early commits, and the archived notes in `learning/`, still compare the
+two — you will hit that in `git log -p`, `git show`, or `git log -S`.
+
+That original project is **out of scope**. It is not a reference, not a
+spec, and not a source of truth for caleb's behavior. Do not go looking for
+it, do not open or run it, and do not reopen those comparisons unless the
+user explicitly asks you to. If history and this file disagree, this file
+wins.
+
+Current behavior is defined by this file, the code, and the tests — nothing
+else. `learning/` is untracked personal material; ignore it unless asked.
 
 ## Status
 
@@ -129,7 +139,7 @@ also report releases run every binding twice.
 
 - **Two panes** — active (left) / completed (right). Toggling moves a task
   across panes. Left gets `width / 2`; the odd column lands in the right
-  pane, matching ava.
+  pane.
 - **Color palette** lives in `ui::Palette`, 256-color indices only: `accent`
   141 (light violet) for the focused border and input box, `muted` 240 (dim
   gray) for unfocused panes, `help` 177 (orchid) for the help overlay, `warn`
@@ -161,8 +171,7 @@ double-click opens the selection; `Esc` or `q` exits the program — it does
 Confirmed empirically against the installed crates. Don't second-guess them:
 
 - `Block::bordered().border_type(BorderType::Rounded).title("─ Active ")`
-  renders `╭─ Active ───╮` — ava's exact border. The leading `─` belongs in
-  the title string.
+  renders `╭─ Active ───╮`. The leading `─` belongs in the title string.
 - `Padding` lives at `ratatui::widgets::Padding`, not `ratatui::layout`.
 - Styling a `Line` inside a two-`Line` `ListItem` highlights only that line.
 - `ListState::offset_mut() -> &mut usize` sets the first visible **item**.
@@ -171,30 +180,23 @@ Confirmed empirically against the installed crates. Don't second-guess them:
   destructure with `let [a, b, c] = ...`.
 - Buffer cells read as `buf[(x, y)]` with `.symbol()`, `.fg`, `.modifier`.
 - jiff: `Zoned::now().datetime()` yields a `civil::DateTime` with
-  `.year() .month() .day() .hour() .minute()`. This one call replaces ava's
-  289-line hand-written TZif parser.
+  `.year() .month() .day() .hour() .minute()`. It resolves the local zone in
+  pure Rust — no hand-written TZif parsing, no libc.
 - `ratatui::init()` enables raw mode + alt screen and installs a panic hook,
   but does **not** enable mouse capture — that needs an explicit
   `execute!(stdout(), EnableMouseCapture)`.
 
-## Divergences from ava
+## Deliberate behaviors
 
-Everything caleb does differently. Each is deliberate.
+Non-obvious choices. Don't "fix" them without asking.
 
-| # | Divergence | Why |
-|---|---|---|
-| 1 | Mouse click-to-select, click-to-focus, and double-click-to-toggle | New feature requested for caleb; ava has wheel-scroll only |
-| 2 | `NO_COLOR` keeps `BOLD`/`REVERSED`/`DIM`/`CROSSED_OUT` | ava's code drops them, leaving no visible cursor; its own docs say otherwise |
-| 3 | Task text truncates on character boundaries, not bytes | `render.zig:347` and `session.zig:124` split multi-byte UTF-8 into mojibake |
-| 4 | clap's bad-flag message replaces ava's hand-written one | Using clap at all implies its error format; exit code 2 is unchanged |
-| 5 | Storage is `$XDG_DATA_HOME/caleb`, not `.../ava` | Both binaries can run side by side without fighting over files |
-| 6 | Help overlay gains a `Mouse` section | Documents divergence 1 |
-| 7 | Terminal restore via `Drop` + panic hook | `Drop` is Rust's `defer`; the panic hook covers a case ava cannot |
-| 8 | Rendering is diffed, not full-repaint | ratatui diffs by design; ava chose full repaint deliberately, but this is invisible to the user |
-| 9 | Add-task input scrolls to keep the caret visible | ava truncates from the right (`render.zig:421-426`), freezing the display once input overflows the field, so newly typed characters never appear. caleb scrolls the view instead. Confirmed with the user after review surfaced the difference. |
-
-Everything else — layout, palette, glyphs, key bindings, file format,
-filenames, picker behavior, CLI surface, exit codes — matches ava.
+| Behavior | Why |
+|---|---|
+| Task text truncates on character boundaries, not bytes | Byte slicing splits multi-byte UTF-8 into mojibake — and in Rust it panics |
+| `NO_COLOR` keeps `BOLD`/`REVERSED`/`DIM`/`CROSSED_OUT` | Dropping them leaves no visible cursor |
+| Add-task input scrolls to keep the caret visible | Truncating from the right freezes the display once input overflows the field, so newly typed characters never appear |
+| Terminal restore via `Drop` + a panic hook | `Drop` covers every early return and `?`; the hook covers a panic mid-frame |
+| clap owns the bad-flag message and its exit code 2 | Using clap at all implies its error format |
 
 ## Out of scope
 
@@ -204,6 +206,5 @@ filenames, picker behavior, CLI surface, exit codes — matches ava.
 - Preserving unknown markdown lines on load
 - Search across sessions
 - Drag-to-reorder with the mouse
-- Importing or reading ava's session directory
 - Per-task coloring — only structural chrome and state-based styling
 - macOS / BSD support (crossterm makes it plausible, but it stays untested)
