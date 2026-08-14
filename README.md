@@ -4,9 +4,13 @@ Named for Caleb Smith in
 [Ex Machina](<https://en.wikipedia.org/wiki/Ex_Machina_(film)>) — A film by
 Alex Garland.
 
+<br>
+
 <p align="center">
-  <img src="assets/caleb.jpg" alt="Caleb Smith in Ex Machina" width="395">
+  <img src="assets/caleb.jpg" alt="Caleb Smith in Ex Machina" width="700">
 </p>
+
+<br>
 
 ---
 
