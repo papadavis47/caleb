@@ -140,8 +140,11 @@ also report releases run every binding twice.
 - **Two panes** — active (left) / completed (right). Toggling moves a task
   across panes. Left gets `width / 2`; the odd column lands in the right
   pane.
+- **Continuous pane borders** — panes keep thin `─` horizontals but use heavy
+  `┃` verticals and matching mixed-weight corners. The heavier glyph avoids
+  row-boundary gaps in terminal fonts.
 - **Color palette** lives in `ui::Palette`, 256-color indices only: `accent`
-  141 (light violet) for the focused border and input box, `muted` 240 (dim
+  47 (matrix green) for the focused border and input box, `muted` 240 (dim
   gray) for unfocused panes, `help` 177 (orchid) for the help overlay, `warn`
   221 (gold) for the unsaved marker. Retuning the look = one line per slot.
 - **2-row stride** — each task is a blank spacer row followed by a content

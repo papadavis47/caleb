@@ -9,6 +9,7 @@ use crate::session::{Pane, Task, Timestamp};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, ListState, Padding, Paragraph};
 
@@ -21,6 +22,19 @@ pub const MIN_COLS: u16 = 30;
 pub const ROW_STRIDE: u16 = 2;
 
 const STATUS_TEXT: &str = " a add  d delete  space toggle  J/K move  s save  q quit  ? help";
+
+/// Heavy verticals span terminal cell boundaries more reliably than `│`,
+/// while light horizontals preserve the existing pane appearance.
+const PANE_BORDER: border::Set<'static> = border::Set {
+    top_left: "┍",
+    top_right: "┑",
+    bottom_left: "┕",
+    bottom_right: "┙",
+    vertical_left: "┃",
+    vertical_right: "┃",
+    horizontal_top: "─",
+    horizontal_bottom: "─",
+};
 
 /// 256-color palette for chrome. Kept in one place so retuning the look is a
 /// one-line change per slot.
@@ -40,7 +54,7 @@ impl Palette {
     pub fn new(color_enabled: bool) -> Self {
         if color_enabled {
             Self {
-                accent: Color::Indexed(141),
+                accent: Color::Indexed(47),
                 muted: Color::Indexed(240),
                 help: Color::Indexed(177),
                 warn: Color::Indexed(221),
@@ -204,7 +218,7 @@ fn draw_pane(frame: &mut Frame, state: &ViewState, area: Rect, pane: Pane) {
     };
 
     let block = Block::bordered()
-        .border_type(BorderType::Rounded)
+        .border_set(PANE_BORDER)
         .border_style(state.palette.border(focused))
         .padding(Padding::horizontal(1))
         .title(title);
@@ -446,9 +460,19 @@ mod tests {
     }
 
     #[test]
-    fn pane_borders_carry_rounded_titles() {
+    fn pane_borders_carry_titles_with_mixed_weight_corners() {
         let buf = render(40, 10, &base(&[], &[]));
-        assert_eq!(row(&buf, 1), "╭─ Active ─────────╮╭─ Completed ──────╮");
+        assert_eq!(row(&buf, 1), "┍─ Active ─────────┑┍─ Completed ──────┑");
+    }
+
+    #[test]
+    fn pane_vertical_borders_are_continuous() {
+        let buf = render(40, 10, &base(&[], &[]));
+        for y in 2..8 {
+            for x in [0, 19, 20, 39] {
+                assert_eq!(buf[(x, y)].symbol(), "┃");
+            }
+        }
     }
 
     #[test]
@@ -457,7 +481,7 @@ mod tests {
         let completed = [task("done thing", true)];
         let buf = render(40, 10, &base(&active, &completed));
         // Row 2 is the spacer, row 3 the first task's content.
-        assert_eq!(row(&buf, 2), "│                  ││                  │");
+        assert_eq!(row(&buf, 2), "┃                  ┃┃                  ┃");
         assert!(row(&buf, 3).contains("  first thing"));
         assert!(row(&buf, 3).contains("✓ done thing"));
     }
@@ -484,7 +508,7 @@ mod tests {
     #[test]
     fn focused_pane_uses_accent_and_unfocused_uses_muted() {
         let buf = render(40, 10, &base(&[], &[]));
-        assert_eq!(buf[(0u16, 1u16)].fg, Color::Indexed(141));
+        assert_eq!(buf[(0u16, 1u16)].fg, Color::Indexed(47));
         assert_eq!(buf[(20u16, 1u16)].fg, Color::Indexed(240));
     }
 
@@ -502,7 +526,7 @@ mod tests {
         let buf = render(41, 10, &base(&[], &[]));
         let line = row(&buf, 1);
         // Left pane is 20 cols, right pane 21.
-        assert_eq!(line.chars().nth(20).unwrap(), '╭');
+        assert_eq!(line.chars().nth(20).unwrap(), '┍');
     }
 
     #[test]
@@ -541,7 +565,7 @@ mod tests {
         let buf = render(40, 10, &s);
         // 10 rows, 0-indexed: header 0, panes 1..=5, field 6/7/8, blank 9.
         // The pane bottom border sits on row 5.
-        assert!(row(&buf, 5).starts_with('╰'));
+        assert!(row(&buf, 5).starts_with('┕'));
         assert!(row(&buf, 6).starts_with("╭─ Add task "));
         assert!(row(&buf, 7).contains("> hi_"));
         assert!(row(&buf, 8).starts_with('╰'));
@@ -564,7 +588,7 @@ mod tests {
         s.overlay = Overlay::Input("x");
         let buf = render(40, 10, &s);
         // Field top-left corner: row 6, column 0.
-        assert_eq!(buf[(0u16, 6u16)].fg, Color::Indexed(141));
+        assert_eq!(buf[(0u16, 6u16)].fg, Color::Indexed(47));
     }
 
     #[test]
