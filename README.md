@@ -4,6 +4,10 @@ Named for Caleb Smith in
 [Ex Machina](<https://en.wikipedia.org/wiki/Ex_Machina_(film)>) — A film by
 Alex Garland.
 
+<p align="center">
+  <img src="assets/caleb.jpg" alt="Caleb Smith in Ex Machina" width="395">
+</p>
+
 ---
 
 **caleb** is a simple TUI to-do list for coding sessions. One file per
