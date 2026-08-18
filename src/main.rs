@@ -8,11 +8,27 @@ use caleb::{app, picker, session, storage, tui, ui};
 use clap::Parser;
 use std::path::Path;
 
+/// Help layout: name, version, and description lead, and the repository URL
+/// trails the options.
+///
+/// The pieces come from `CARGO_PKG_*` rather than string literals so the help
+/// text cannot drift from `Cargo.toml` the way the hardcoded `about` did.
+const HELP_TEMPLATE: &str = "\
+{name} {version}
+{about}
+
+{usage-heading} {usage}
+
+{all-args}{after-help}
+";
+
 #[derive(Parser, Debug)]
 #[command(
     name = "caleb",
     version,
-    about = "Track tasks for a coding session",
+    about = env!("CARGO_PKG_DESCRIPTION"),
+    help_template = HELP_TEMPLATE,
+    after_help = concat!("Repository: ", env!("CARGO_PKG_REPOSITORY")),
     // caleb wants -v for version; clap defaults to -V, so wire it by hand.
     disable_version_flag = true
 )]

@@ -79,6 +79,46 @@ fn version_and_help_short_circuit() {
 }
 
 #[test]
+fn help_leads_with_name_version_and_description() {
+    let home = tempfile::tempdir().unwrap();
+    let out = caleb(home.path()).arg("-h").output().unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    let mut lines = text.lines();
+
+    assert_eq!(
+        lines.next().unwrap(),
+        format!("caleb {}", env!("CARGO_PKG_VERSION")),
+        "first line should be the name and version"
+    );
+    assert_eq!(
+        lines.next().unwrap(),
+        env!("CARGO_PKG_DESCRIPTION"),
+        "second line should be the Cargo.toml description"
+    );
+}
+
+#[test]
+fn help_ends_with_the_repository_url() {
+    let home = tempfile::tempdir().unwrap();
+    let out = caleb(home.path()).arg("-h").output().unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+
+    assert_eq!(
+        text.trim_end().lines().last().unwrap(),
+        format!("Repository: {}", env!("CARGO_PKG_REPOSITORY")),
+        "last line should be the repository URL"
+    );
+}
+
+#[test]
+fn short_and_long_help_agree() {
+    let home = tempfile::tempdir().unwrap();
+    let short = caleb(home.path()).arg("-h").output().unwrap().stdout;
+    let long = caleb(home.path()).arg("--help").output().unwrap().stdout;
+    assert_eq!(short, long);
+}
+
+#[test]
 fn an_unknown_flag_is_rejected() {
     let home = tempfile::tempdir().unwrap();
     caleb(home.path()).arg("--nope").assert().failure();
