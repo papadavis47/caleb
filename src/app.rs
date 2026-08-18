@@ -125,7 +125,7 @@ impl App {
             }
             // `Session::toggle`/`delete` no-op on an out-of-range index, so
             // there is no bounds check to duplicate here.
-            KeyCode::Char(' ') | KeyCode::Char('x') => {
+            KeyCode::Char(' ' | 'x') => {
                 let (pane, cursor) = (self.focused, *self.cursor_mut());
                 self.session.toggle(pane, cursor);
             }
@@ -309,7 +309,7 @@ impl App {
             MouseEventKind::ScrollUp => self.scroll_focused(-1),
             MouseEventKind::ScrollDown => self.scroll_focused(1),
             MouseEventKind::Down(MouseButton::Left) => {
-                self.handle_click(event.column, event.row, now)
+                self.handle_click(event.column, event.row, now);
             }
             _ => {}
         }
@@ -378,11 +378,11 @@ impl App {
     /// pty.
     fn handle_event(
         &mut self,
-        event: Event,
+        event: &Event,
         now: Instant,
         pane_height: u16,
     ) -> Result<(), SaveError> {
-        match event {
+        match *event {
             Event::Key(key) if key.kind == event::KeyEventKind::Press => {
                 // Press-only: terminals that also report releases would
                 // otherwise run every binding twice.
@@ -414,7 +414,7 @@ impl App {
             // user is looking at when the next event arrives.
             let pane_height = self.pane_rects.active.height;
 
-            self.handle_event(event::read()?, Instant::now(), pane_height)?;
+            self.handle_event(&event::read()?, Instant::now(), pane_height)?;
         }
 
         if self.session.dirty {
@@ -749,13 +749,13 @@ mod tests {
         let mut release = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE);
         release.kind = event::KeyEventKind::Release;
 
-        app.handle_event(Event::Key(release), Instant::now(), 8)
+        app.handle_event(&Event::Key(release), Instant::now(), 8)
             .unwrap();
         assert_eq!(app.session.active.len(), 2, "release must not delete");
 
         let mut down = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE);
         down.kind = event::KeyEventKind::Press;
-        app.handle_event(Event::Key(down), Instant::now(), 8)
+        app.handle_event(&Event::Key(down), Instant::now(), 8)
             .unwrap();
         assert_eq!(app.session.active.len(), 1, "press must delete");
     }
@@ -763,7 +763,7 @@ mod tests {
     #[test]
     fn handle_event_ignores_resize() {
         let mut app = app_with(&["a"]);
-        app.handle_event(Event::Resize(10, 10), Instant::now(), 8)
+        app.handle_event(&Event::Resize(10, 10), Instant::now(), 8)
             .unwrap();
         assert_eq!(app.session.active.len(), 1);
         assert!(!app.quit);
@@ -782,7 +782,7 @@ mod tests {
         };
 
         let wheel = click(MouseEventKind::ScrollDown, 5, 5);
-        app.handle_event(Event::Mouse(wheel), Instant::now(), 8)
+        app.handle_event(&Event::Mouse(wheel), Instant::now(), 8)
             .unwrap();
         assert_eq!(app.active_scroll, 1);
         assert_eq!(app.active_cursor, 0, "wheel leaves the cursor put");
@@ -790,7 +790,7 @@ mod tests {
         // A key event re-syncs the offset to the cursor.
         let mut key = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
         key.kind = event::KeyEventKind::Press;
-        app.handle_event(Event::Key(key), Instant::now(), 8)
+        app.handle_event(&Event::Key(key), Instant::now(), 8)
             .unwrap();
         assert_eq!(app.active_scroll, 0);
     }

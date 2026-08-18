@@ -91,7 +91,7 @@ pub struct Palette {
 
 impl Palette {
     /// When color is disabled, every slot becomes `Color::Reset` — but
-    /// callers keep applying BOLD/DIM/REVERSED/CROSSED_OUT, which are
+    /// callers keep applying `BOLD/DIM/REVERSED/CROSSED_OUT`, which are
     /// attributes rather than colors and stay useful without them.
     pub fn new(color_enabled: bool) -> Self {
         if color_enabled {

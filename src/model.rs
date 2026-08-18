@@ -63,6 +63,7 @@ pub enum Pane {
 
 impl Pane {
     /// The opposite pane. Toggling moves a task from one to the other.
+    #[must_use]
     pub fn other(self) -> Self {
         match self {
             Pane::Active => Pane::Completed,

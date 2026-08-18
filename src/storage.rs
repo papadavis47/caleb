@@ -56,7 +56,7 @@ fn timestamp_from_unix_seconds(secs: i64) -> Timestamp {
 }
 
 /// Local wall-clock now. jiff reads the system zone (`$TZ`, then
-/// `/etc/localtime`) itself, in pure Rust — no hand-written TZif parsing and
+/// `/etc/localtime`) itself, in pure Rust — no hand-written `TZif` parsing and
 /// no libc dependency.
 pub fn timestamp_now() -> Timestamp {
     from_civil(jiff::Zoned::now().datetime())
@@ -120,7 +120,7 @@ mod tests {
     #[test]
     fn leap_day_2024() {
         // 1709209496 == 2024-02-29 12:24:56 UTC
-        let ts = timestamp_from_unix_seconds(1709209496);
+        let ts = timestamp_from_unix_seconds(1_709_209_496);
         assert_eq!(
             ts,
             Timestamp {

@@ -59,7 +59,6 @@ pub fn parse(source: &str) -> Result<Parsed, ParseError> {
                 Section::Completed => result.completed.push(task),
                 Section::None | Section::Active => result.active.push(task),
             }
-            continue;
         }
         // Anything else: silently ignored.
     }
