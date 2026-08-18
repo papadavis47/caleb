@@ -41,6 +41,16 @@ fn a_session_survives_save_load_and_resume() {
         !dir.path().join(&s.filename).exists(),
         "resuming consumes the old file"
     );
+
+    // Filename and header agree immediately, with no edit required.
+    let on_disk = std::fs::read_to_string(dir.path().join(&resumed.filename)).unwrap();
+    assert!(on_disk.starts_with("# Session 2026-05-31 16:45\n"));
+    assert_eq!(
+        Session::load(dir.path(), &resumed.filename)
+            .unwrap()
+            .timestamp,
+        Some(ts(16, 45))
+    );
 }
 
 #[test]

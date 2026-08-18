@@ -66,6 +66,12 @@ pub enum ResumeError {
         #[source]
         source: LoadError,
     },
+    #[error("cannot rewrite the header of '{name}': {source}")]
+    Rewrite {
+        name: String,
+        #[source]
+        source: SaveError,
+    },
 }
 
 /// Build an empty session with a unique filename in `dir`. Nothing is
@@ -104,10 +110,21 @@ pub fn resume(dir: &Path, original: &str, ts: Timestamp) -> Result<Session, Resu
     }
 
     let mut loaded = Session::load(dir, &new_name).map_err(|source| ResumeError::Load {
+        name: new_name.clone(),
+        source,
+    })?;
+
+    // Write the new timestamp back out immediately rather than waiting for the
+    // next edit to mark the session dirty. The rename already touched the
+    // filesystem; leaving the `# Session` header disagreeing with the filename
+    // until the user happens to change something is the worse of the two
+    // states. `save` clears `dirty`, so the header does not read as unsaved.
+    loaded.timestamp = Some(ts);
+    loaded.save(dir).map_err(|source| ResumeError::Rewrite {
         name: new_name,
         source,
     })?;
-    loaded.timestamp = Some(ts);
+
     Ok(loaded)
 }
 
@@ -413,6 +430,26 @@ mod tests {
         // (and here the file does not exist at all).
         let err = resume(dir.path(), "2026-05-31_14-30.md", ts).unwrap_err();
         assert!(matches!(err, ResumeError::Load { .. }));
+    }
+
+    #[test]
+    fn resume_rewrites_the_header_to_match_the_new_filename() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut orig = create_new(dir.path(), ts_at(14, 30)).unwrap();
+        orig.add(Pane::Active, "carry me over");
+        orig.save(dir.path()).unwrap();
+
+        let resumed = resume(dir.path(), &orig.filename, ts_at(16, 45)).unwrap();
+
+        // The header on disk must agree with the name on disk, without the
+        // user having to make an edit first.
+        let on_disk = std::fs::read_to_string(dir.path().join(&resumed.filename)).unwrap();
+        assert!(
+            on_disk.starts_with("# Session 2026-05-31 16:45\n"),
+            "header should carry the resumed timestamp, got: {on_disk:?}"
+        );
+        assert!(on_disk.contains("- [ ] carry me over"));
+        assert!(!resumed.dirty, "the rewrite leaves nothing unsaved");
     }
 
     #[test]
