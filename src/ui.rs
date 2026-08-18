@@ -14,7 +14,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, ListState, Padding, Paragraph};
 
 /// Below this, draw only a "terminal too small" message.
-pub const MIN_ROWS: u16 = 8;
+pub const MIN_ROWS: u16 = 10;
 pub const MIN_COLS: u16 = 30;
 
 /// Rows each task occupies: one blank spacer plus one content row, so items
@@ -54,7 +54,7 @@ impl Palette {
     pub fn new(color_enabled: bool) -> Self {
         if color_enabled {
             Self {
-                accent: Color::Indexed(47),
+                accent: Color::Indexed(40),
                 muted: Color::Indexed(240),
                 help: Color::Indexed(177),
                 warn: Color::Indexed(221),
@@ -129,7 +129,11 @@ pub fn draw(frame: &mut Frame, state: &ViewState) -> PaneRects {
         Overlay::None | Overlay::Help => 1,
     };
 
-    let [header_area, panes_area, bottom_area] = Layout::vertical([
+    // One blank row above and below the header gives the top line a little
+    // breathing room before the pane borders.
+    let [_, header_area, _, panes_area, bottom_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(0),
         Constraint::Length(bottom),
@@ -446,7 +450,7 @@ mod tests {
         });
         let buf = render(60, 10, &s);
         assert_eq!(
-            row(&buf, 0).trim_end(),
+            row(&buf, 1).trim_end(),
             " caleb · 2026-05-31 14:30 · 0 active / 0 done"
         );
     }
@@ -456,19 +460,19 @@ mod tests {
         let mut s = base(&[], &[]);
         s.dirty = true;
         let buf = render(60, 10, &s);
-        assert!(row(&buf, 0).contains("•unsaved"));
+        assert!(row(&buf, 1).contains("•unsaved"));
     }
 
     #[test]
     fn pane_borders_carry_titles_with_mixed_weight_corners() {
         let buf = render(40, 10, &base(&[], &[]));
-        assert_eq!(row(&buf, 1), "┍─ Active ─────────┑┍─ Completed ──────┑");
+        assert_eq!(row(&buf, 3), "┍─ Active ─────────┑┍─ Completed ──────┑");
     }
 
     #[test]
     fn pane_vertical_borders_are_continuous() {
         let buf = render(40, 10, &base(&[], &[]));
-        for y in 2..8 {
+        for y in 4..8 {
             for x in [0, 19, 20, 39] {
                 assert_eq!(buf[(x, y)].symbol(), "┃");
             }
@@ -480,18 +484,18 @@ mod tests {
         let active = [task("first thing", false)];
         let completed = [task("done thing", true)];
         let buf = render(40, 10, &base(&active, &completed));
-        // Row 2 is the spacer, row 3 the first task's content.
-        assert_eq!(row(&buf, 2), "┃                  ┃┃                  ┃");
-        assert!(row(&buf, 3).contains("  first thing"));
-        assert!(row(&buf, 3).contains("✓ done thing"));
+        // Row 4 is the spacer, row 5 the first task's content.
+        assert_eq!(row(&buf, 4), "┃                  ┃┃                  ┃");
+        assert!(row(&buf, 5).contains("  first thing"));
+        assert!(row(&buf, 5).contains("✓ done thing"));
     }
 
     #[test]
     fn cursor_row_is_reversed_and_spacer_is_not() {
         let active = [task("first thing", false)];
         let buf = render(40, 10, &base(&active, &[]));
-        assert!(buf[(3u16, 3u16)].modifier.contains(Modifier::REVERSED));
-        assert!(!buf[(3u16, 2u16)].modifier.contains(Modifier::REVERSED));
+        assert!(buf[(3u16, 5u16)].modifier.contains(Modifier::REVERSED));
+        assert!(!buf[(3u16, 4u16)].modifier.contains(Modifier::REVERSED));
     }
 
     #[test]
@@ -500,7 +504,7 @@ mod tests {
         let mut s = base(&[], &completed);
         s.focused = Pane::Active;
         let buf = render(40, 10, &s);
-        let cell = &buf[(22u16, 3u16)];
+        let cell = &buf[(22u16, 5u16)];
         assert!(cell.modifier.contains(Modifier::DIM));
         assert!(cell.modifier.contains(Modifier::CROSSED_OUT));
     }
@@ -508,8 +512,8 @@ mod tests {
     #[test]
     fn focused_pane_uses_accent_and_unfocused_uses_muted() {
         let buf = render(40, 10, &base(&[], &[]));
-        assert_eq!(buf[(0u16, 1u16)].fg, Color::Indexed(47));
-        assert_eq!(buf[(20u16, 1u16)].fg, Color::Indexed(240));
+        assert_eq!(buf[(0u16, 3u16)].fg, Color::Indexed(40));
+        assert_eq!(buf[(20u16, 3u16)].fg, Color::Indexed(240));
     }
 
     #[test]
@@ -524,7 +528,7 @@ mod tests {
     #[test]
     fn odd_width_gives_the_extra_column_to_the_right_pane() {
         let buf = render(41, 10, &base(&[], &[]));
-        let line = row(&buf, 1);
+        let line = row(&buf, 3);
         // Left pane is 20 cols, right pane 21.
         assert_eq!(line.chars().nth(20).unwrap(), '┍');
     }
@@ -536,9 +540,9 @@ mod tests {
         s.palette = Palette::new(false);
         let buf = render(40, 10, &s);
         // Border color gone...
-        assert_eq!(buf[(0u16, 1u16)].fg, Color::Reset);
+        assert_eq!(buf[(0u16, 3u16)].fg, Color::Reset);
         // ...but the cursor is still visible.
-        assert!(buf[(3u16, 3u16)].modifier.contains(Modifier::REVERSED));
+        assert!(buf[(3u16, 5u16)].modifier.contains(Modifier::REVERSED));
     }
 
     #[test]
@@ -548,12 +552,12 @@ mod tests {
         s.active_scroll = 4;
         s.active_cursor = 4;
         let buf = render(40, 10, &s);
-        assert!(row(&buf, 3).contains("task4"));
+        assert!(row(&buf, 5).contains("task4"));
     }
 
     #[test]
     fn visible_tasks_halves_the_inner_height() {
-        // A 10-row terminal: 1 header + 1 status = 8 pane rows, 6 inner.
+        // A 12-row terminal: 3 header rows + 1 status = 8 pane rows, 6 inner.
         assert_eq!(visible_tasks(8), 3);
         assert_eq!(visible_tasks(2), 0);
     }
@@ -563,7 +567,8 @@ mod tests {
         let mut s = base(&[], &[]);
         s.overlay = Overlay::Input("hi");
         let buf = render(40, 10, &s);
-        // 10 rows, 0-indexed: header 0, panes 1..=5, field 6/7/8, blank 9.
+        // 10 rows, 0-indexed: blank 0, header 1, blank 2, panes 3..=5,
+        // field 6/7/8, blank 9.
         // The pane bottom border sits on row 5.
         assert!(row(&buf, 5).starts_with('┕'));
         assert!(row(&buf, 6).starts_with("╭─ Add task "));
@@ -588,7 +593,7 @@ mod tests {
         s.overlay = Overlay::Input("x");
         let buf = render(40, 10, &s);
         // Field top-left corner: row 6, column 0.
-        assert_eq!(buf[(0u16, 6u16)].fg, Color::Indexed(47));
+        assert_eq!(buf[(0u16, 6u16)].fg, Color::Indexed(40));
     }
 
     #[test]
