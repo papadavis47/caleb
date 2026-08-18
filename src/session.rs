@@ -1,55 +1,17 @@
-//! Domain types for a coding session.
+//! An open session and its persistence: load, save, and resume.
+//!
+//! The plain data types live in [`crate::model`]; this module is what turns
+//! them into files on disk and back.
 //!
 //! Rust note: `String` and `Vec<Task>` own their memory, and `Drop` frees it
 //! when a `Session` goes out of scope — so there is nothing to free by hand
 //! and no allocator to thread through the API.
 
 use crate::markdown;
+use crate::model::{MAX_TASK_BYTES, Pane, Task, Timestamp, truncate_on_char_boundary};
 use crate::storage;
 use std::path::Path;
 use thiserror::Error;
-
-/// Tasks are short notes, capped so rendering never needs to wrap.
-pub const MAX_TASK_BYTES: usize = 150;
-
-/// A single task. `text` is owned outright — no lifetime, no manual free.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Task {
-    pub text: String,
-    pub done: bool,
-}
-
-/// Wall-clock time at minute granularity — all we need for filenames and
-/// the markdown header.
-///
-/// Rust note: an absent timestamp is `Option<Timestamp>`, never a sentinel
-/// value. The compiler forces every read to handle the `None` case, so a
-/// missing header cannot silently become a zero date.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Timestamp {
-    pub year: u16,
-    pub month: u8,
-    pub day: u8,
-    pub hour: u8,
-    pub minute: u8,
-}
-
-/// Which pane has focus. Movement and toggling apply to whichever this names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Pane {
-    Active,
-    Completed,
-}
-
-impl Pane {
-    /// The opposite pane. Toggling moves a task from one to the other.
-    pub fn other(self) -> Self {
-        match self {
-            Pane::Active => Pane::Completed,
-            Pane::Completed => Pane::Active,
-        }
-    }
-}
 
 /// All in-memory state for an open session.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,24 +23,6 @@ pub struct Session {
     pub completed: Vec<Task>,
     /// True when in-memory state diverges from what is on disk.
     pub dirty: bool,
-}
-
-/// Longest prefix of `s` that fits in `max` bytes without splitting a
-/// character.
-///
-/// Rust note: slicing at exactly `max` bytes would cut a multi-byte UTF-8
-/// character in half. Rust's `&str` is guaranteed valid UTF-8, so that slice
-/// panics rather than printing mojibake — the type system forces us to walk
-/// back to a boundary.
-pub fn truncate_on_char_boundary(s: &str, max: usize) -> &str {
-    if s.len() <= max {
-        return s;
-    }
-    let mut end = max;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
 }
 
 /// Rust note: `#[from]` generates the `From` impls that make `?` convert an

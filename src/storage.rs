@@ -4,7 +4,7 @@
 //! fields) are testable without touching the filesystem, and the one
 //! function that does touch it takes a `&Path` so tests hand it a tempdir.
 
-use crate::session::Timestamp;
+use crate::model::Timestamp;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 

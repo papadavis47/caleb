@@ -4,7 +4,8 @@
 //! terminal — `main` and `tui` do that — which is what makes every binding
 //! testable without a pty.
 
-use crate::session::{MAX_TASK_BYTES, Pane, SaveError, Session};
+use crate::model::{MAX_TASK_BYTES, Pane};
+use crate::session::{SaveError, Session};
 use crate::tui::Tui;
 use crate::ui::{self, Overlay, Palette, PaneRects, ViewState};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
@@ -589,7 +590,7 @@ mod tests {
         for _ in 0..200 {
             press(&mut app, 'x');
         }
-        assert_eq!(app.input.len(), crate::session::MAX_TASK_BYTES);
+        assert_eq!(app.input.len(), crate::model::MAX_TASK_BYTES);
     }
 
     #[test]
@@ -616,7 +617,7 @@ mod tests {
         }
         // 148 + 2 = 150 == MAX_TASK_BYTES, so it must be accepted.
         press(&mut app, 'é');
-        assert_eq!(app.input.len(), crate::session::MAX_TASK_BYTES);
+        assert_eq!(app.input.len(), crate::model::MAX_TASK_BYTES);
         assert!(app.input.ends_with('é'));
     }
 

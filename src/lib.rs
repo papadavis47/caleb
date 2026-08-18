@@ -9,6 +9,7 @@
 
 pub mod app;
 pub mod markdown;
+pub mod model;
 pub mod picker;
 pub mod session;
 pub mod storage;

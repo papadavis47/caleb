@@ -2,7 +2,7 @@
 //!
 //! Pure functions: bytes in, typed data out. No I/O, no globals.
 
-use crate::session::{MAX_TASK_BYTES, Task, Timestamp};
+use crate::model::{MAX_TASK_BYTES, Task, Timestamp};
 use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Eq)]

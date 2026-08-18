@@ -5,7 +5,7 @@
 //! cells — which is also why tests can assert against a `TestBackend` buffer
 //! instead of a real terminal.
 
-use crate::session::{Pane, Task, Timestamp};
+use crate::model::{Pane, Task, Timestamp};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
