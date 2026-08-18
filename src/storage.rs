@@ -4,11 +4,11 @@
 //! fields) are testable without touching the filesystem, and the one
 //! function that does touch it takes a `&Path` so tests hand it a tempdir.
 
-use crate::session::Timestamp;
+use crate::model::Timestamp;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-pub const DEFAULT_SUBDIR: &str = "caleb";
+const DEFAULT_SUBDIR: &str = "caleb";
 pub const FILE_EXTENSION: &str = ".md";
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -41,11 +41,12 @@ pub fn default_storage_dir() -> Result<PathBuf, ResolveError> {
 /// Convert UTC Unix seconds into wall-clock fields. Negative input clamps
 /// to the epoch — the only sane fallback for a clock behind 1970.
 ///
-/// Nothing in the binary calls this: `timestamp_now` goes through the local
-/// zone instead. It stays because it is the deterministic, seconds-in /
-/// fields-out core that the conversion tests can actually pin down.
-#[allow(dead_code)]
-pub fn timestamp_from_unix_seconds(secs: i64) -> Timestamp {
+/// Test-only: `timestamp_now` goes through the local zone instead. This is the
+/// deterministic seconds-in / fields-out core that the conversion tests pin
+/// down, so it is compiled only for them rather than carried in the binary
+/// behind an `#[allow(dead_code)]`.
+#[cfg(test)]
+fn timestamp_from_unix_seconds(secs: i64) -> Timestamp {
     let secs = secs.max(0);
     let dt = jiff::Timestamp::from_second(secs)
         .expect("in-range unix seconds")
@@ -55,7 +56,7 @@ pub fn timestamp_from_unix_seconds(secs: i64) -> Timestamp {
 }
 
 /// Local wall-clock now. jiff reads the system zone (`$TZ`, then
-/// `/etc/localtime`) itself, in pure Rust — no hand-written TZif parsing and
+/// `/etc/localtime`) itself, in pure Rust — no hand-written `TZif` parsing and
 /// no libc dependency.
 pub fn timestamp_now() -> Timestamp {
     from_civil(jiff::Zoned::now().datetime())
@@ -119,7 +120,7 @@ mod tests {
     #[test]
     fn leap_day_2024() {
         // 1709209496 == 2024-02-29 12:24:56 UTC
-        let ts = timestamp_from_unix_seconds(1709209496);
+        let ts = timestamp_from_unix_seconds(1_709_209_496);
         assert_eq!(
             ts,
             Timestamp {

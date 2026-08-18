@@ -42,7 +42,7 @@ pub fn is_tty() -> bool {
     std::io::stdin().is_terminal() && stdout().is_terminal()
 }
 
-/// NO_COLOR — any non-empty value disables color. See https://no-color.org.
+/// `NO_COLOR` — any non-empty value disables color. See <https://no-color.org>.
 pub fn color_enabled() -> bool {
     match std::env::var("NO_COLOR") {
         Ok(v) => v.is_empty(),

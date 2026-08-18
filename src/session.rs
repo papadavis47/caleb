@@ -1,55 +1,17 @@
-//! Domain types for a coding session.
+//! An open session and its persistence: load, save, and resume.
+//!
+//! The plain data types live in [`crate::model`]; this module is what turns
+//! them into files on disk and back.
 //!
 //! Rust note: `String` and `Vec<Task>` own their memory, and `Drop` frees it
 //! when a `Session` goes out of scope — so there is nothing to free by hand
 //! and no allocator to thread through the API.
 
 use crate::markdown;
+use crate::model::{MAX_TASK_BYTES, Pane, Task, Timestamp, truncate_on_char_boundary};
 use crate::storage;
 use std::path::Path;
 use thiserror::Error;
-
-/// Tasks are short notes, capped so rendering never needs to wrap.
-pub const MAX_TASK_BYTES: usize = 150;
-
-/// A single task. `text` is owned outright — no lifetime, no manual free.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Task {
-    pub text: String,
-    pub done: bool,
-}
-
-/// Wall-clock time at minute granularity — all we need for filenames and
-/// the markdown header.
-///
-/// Rust note: an absent timestamp is `Option<Timestamp>`, never a sentinel
-/// value. The compiler forces every read to handle the `None` case, so a
-/// missing header cannot silently become a zero date.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Timestamp {
-    pub year: u16,
-    pub month: u8,
-    pub day: u8,
-    pub hour: u8,
-    pub minute: u8,
-}
-
-/// Which pane has focus. Movement and toggling apply to whichever this names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Pane {
-    Active,
-    Completed,
-}
-
-impl Pane {
-    /// The opposite pane. Toggling moves a task from one to the other.
-    pub fn other(self) -> Self {
-        match self {
-            Pane::Active => Pane::Completed,
-            Pane::Completed => Pane::Active,
-        }
-    }
-}
 
 /// All in-memory state for an open session.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,24 +25,6 @@ pub struct Session {
     pub dirty: bool,
 }
 
-/// Longest prefix of `s` that fits in `max` bytes without splitting a
-/// character.
-///
-/// Rust note: slicing at exactly `max` bytes would cut a multi-byte UTF-8
-/// character in half. Rust's `&str` is guaranteed valid UTF-8, so that slice
-/// panics rather than printing mojibake — the type system forces us to walk
-/// back to a boundary.
-pub fn truncate_on_char_boundary(s: &str, max: usize) -> &str {
-    if s.len() <= max {
-        return s;
-    }
-    let mut end = max;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
-}
-
 /// Rust note: `#[from]` generates the `From` impls that make `?` convert an
 /// `io::Error` or a `ParseError` into a `LoadError` automatically, so callers
 /// see one typed error instead of two.
@@ -92,10 +36,42 @@ pub enum LoadError {
     Parse(#[from] markdown::ParseError),
 }
 
+/// Failure to write a session back to disk.
 #[derive(Debug, Error)]
 pub enum SaveError {
     #[error("cannot write session file: {0}")]
     Io(#[from] std::io::Error),
+}
+
+/// Failure to resume a previously saved session. Each variant names the file
+/// it was working on, because by the time this surfaces the user has already
+/// forgotten which one they picked.
+#[derive(Debug, Error)]
+pub enum ResumeError {
+    #[error("cannot pick a filename for the resumed session: {source}")]
+    Pick {
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("cannot rename '{from}' to '{to}': {source}")]
+    Rename {
+        from: String,
+        to: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("cannot load session '{name}': {source}")]
+    Load {
+        name: String,
+        #[source]
+        source: LoadError,
+    },
+    #[error("cannot rewrite the header of '{name}': {source}")]
+    Rewrite {
+        name: String,
+        #[source]
+        source: SaveError,
+    },
 }
 
 /// Build an empty session with a unique filename in `dir`. Nothing is
@@ -110,6 +86,46 @@ pub fn create_new(dir: &Path, ts: Timestamp) -> std::io::Result<Session> {
         completed: Vec::new(),
         dirty: false,
     })
+}
+
+/// Rename the picked file to `ts` and load it, so resumed work continues under
+/// a fresh timestamp. The old name goes away.
+///
+/// When the new stem collides with the original — resuming within the same
+/// minute you saved — the rename is skipped rather than attempted against
+/// itself.
+pub fn resume(dir: &Path, original: &str, ts: Timestamp) -> Result<Session, ResumeError> {
+    let stem = storage::format_file_stem(ts);
+    let new_name = storage::unique_filename(dir, &stem, storage::FILE_EXTENSION)
+        .map_err(|source| ResumeError::Pick { source })?;
+
+    if original != new_name {
+        std::fs::rename(dir.join(original), dir.join(&new_name)).map_err(|source| {
+            ResumeError::Rename {
+                from: original.to_string(),
+                to: new_name.clone(),
+                source,
+            }
+        })?;
+    }
+
+    let mut loaded = Session::load(dir, &new_name).map_err(|source| ResumeError::Load {
+        name: new_name.clone(),
+        source,
+    })?;
+
+    // Write the new timestamp back out immediately rather than waiting for the
+    // next edit to mark the session dirty. The rename already touched the
+    // filesystem; leaving the `# Session` header disagreeing with the filename
+    // until the user happens to change something is the worse of the two
+    // states. `save` clears `dirty`, so the header does not read as unsaved.
+    loaded.timestamp = Some(ts);
+    loaded.save(dir).map_err(|source| ResumeError::Rewrite {
+        name: new_name,
+        source,
+    })?;
+
+    Ok(loaded)
 }
 
 impl Session {
@@ -204,16 +220,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn empty_session() -> Session {
-        Session {
-            filename: "x.md".to_string(),
-            timestamp: None,
-            active: Vec::new(),
-            completed: Vec::new(),
-            dirty: false,
-        }
-    }
+    use crate::test_util::empty_session;
 
     #[test]
     fn add_then_delete_restores_count() {
@@ -367,5 +374,89 @@ mod tests {
             Session::load(dir.path(), "nope.md"),
             Err(LoadError::Io(_))
         ));
+    }
+
+    fn ts_at(hour: u8, minute: u8) -> Timestamp {
+        Timestamp {
+            year: 2026,
+            month: 5,
+            day: 31,
+            hour,
+            minute,
+        }
+    }
+
+    #[test]
+    fn resume_renames_to_the_new_timestamp_and_drops_the_old_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut orig = create_new(dir.path(), ts_at(14, 30)).unwrap();
+        orig.add(Pane::Active, "carry me over");
+        orig.save(dir.path()).unwrap();
+
+        let now = ts_at(16, 45);
+        let resumed = resume(dir.path(), &orig.filename, now).unwrap();
+
+        assert_eq!(resumed.filename, "2026-05-31_16-45.md");
+        assert_eq!(resumed.timestamp, Some(now));
+        assert_eq!(resumed.active[0].text, "carry me over");
+        assert!(!resumed.dirty);
+        assert!(!dir.path().join(&orig.filename).exists());
+        assert!(dir.path().join(&resumed.filename).exists());
+    }
+
+    #[test]
+    fn resume_within_the_same_minute_gets_a_collision_suffix() {
+        let dir = tempfile::tempdir().unwrap();
+        let ts = ts_at(14, 30);
+        let mut orig = create_new(dir.path(), ts).unwrap();
+        orig.add(Pane::Active, "same minute");
+        orig.save(dir.path()).unwrap();
+
+        // The saved file already occupies the stem, so unique_filename walks
+        // to the -2 suffix rather than handing back a name that would be
+        // renamed onto itself.
+        let resumed = resume(dir.path(), &orig.filename, ts).unwrap();
+        assert_eq!(resumed.filename, "2026-05-31_14-30-2.md");
+        assert_eq!(resumed.active[0].text, "same minute");
+        assert!(!dir.path().join(&orig.filename).exists());
+    }
+
+    #[test]
+    fn resume_of_a_never_saved_session_skips_the_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let ts = ts_at(14, 30);
+        // Nothing on disk, so unique_filename returns the bare stem, which
+        // equals `original` — the guard must skip renaming a file onto itself
+        // (and here the file does not exist at all).
+        let err = resume(dir.path(), "2026-05-31_14-30.md", ts).unwrap_err();
+        assert!(matches!(err, ResumeError::Load { .. }));
+    }
+
+    #[test]
+    fn resume_rewrites_the_header_to_match_the_new_filename() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut orig = create_new(dir.path(), ts_at(14, 30)).unwrap();
+        orig.add(Pane::Active, "carry me over");
+        orig.save(dir.path()).unwrap();
+
+        let resumed = resume(dir.path(), &orig.filename, ts_at(16, 45)).unwrap();
+
+        // The header on disk must agree with the name on disk, without the
+        // user having to make an edit first.
+        let on_disk = std::fs::read_to_string(dir.path().join(&resumed.filename)).unwrap();
+        assert!(
+            on_disk.starts_with("# Session 2026-05-31 16:45\n"),
+            "header should carry the resumed timestamp, got: {on_disk:?}"
+        );
+        assert!(on_disk.contains("- [ ] carry me over"));
+        assert!(!resumed.dirty, "the rewrite leaves nothing unsaved");
+    }
+
+    #[test]
+    fn resume_reports_the_missing_name_when_the_file_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = resume(dir.path(), "vanished.md", ts_at(9, 0)).unwrap_err();
+        assert!(matches!(err, ResumeError::Rename { .. }));
+        assert!(err.to_string().contains("vanished.md"));
     }
 }

@@ -4,19 +4,30 @@
 //! terminal — `main` and `tui` do that — which is what makes every binding
 //! testable without a pty.
 
-use crate::session::{MAX_TASK_BYTES, Pane, SaveError, Session};
+use crate::model::{MAX_TASK_BYTES, Pane};
+use crate::session::{SaveError, Session};
 use crate::tui::Tui;
-use crate::ui::{self, Overlay, Palette, PaneRects, ViewState};
+use crate::ui::{self, ClickTracker, Overlay, Palette, PaneRects, ViewState};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Instant;
+use thiserror::Error;
 
-/// Two clicks on the same task within this window count as a double-click.
-pub const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+/// Anything that can end the event loop early.
+///
+/// Draw and read failures are `io`; the exit-time autosave is its own variant
+/// so the message never blames the wrong subsystem.
+#[derive(Debug, Error)]
+pub enum RunError {
+    #[error("terminal I/O failed: {0}")]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Save(#[from] SaveError),
+}
 
 /// What a screen coordinate resolves to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Hit {
+enum Hit {
     Task { pane: Pane, index: usize },
     Pane(Pane),
 }
@@ -28,21 +39,22 @@ pub enum Mode {
     Help,
 }
 
+#[derive(Debug)]
 pub struct App {
-    pub session: Session,
-    pub storage_dir: PathBuf,
-    pub palette: Palette,
-    pub focused: Pane,
-    pub active_cursor: usize,
-    pub completed_cursor: usize,
-    pub active_scroll: usize,
-    pub completed_scroll: usize,
-    pub mode: Mode,
-    pub input: String,
-    pub quit: bool,
+    session: Session,
+    storage_dir: PathBuf,
+    palette: Palette,
+    focused: Pane,
+    active_cursor: usize,
+    completed_cursor: usize,
+    active_scroll: usize,
+    completed_scroll: usize,
+    mode: Mode,
+    input: String,
+    quit: bool,
     /// Pane geometry from the last frame, for mouse hit-testing.
-    pub pane_rects: PaneRects,
-    pub last_click: Option<(Instant, Pane, usize)>,
+    pane_rects: PaneRects,
+    last_click: ClickTracker<(Pane, usize)>,
 }
 
 impl App {
@@ -60,11 +72,11 @@ impl App {
             input: String::new(),
             quit: false,
             pane_rects: PaneRects::default(),
-            last_click: None,
+            last_click: ClickTracker::default(),
         }
     }
 
-    pub fn view_state(&self) -> ViewState<'_> {
+    fn view_state(&self) -> ViewState<'_> {
         ViewState {
             timestamp: self.session.timestamp,
             active: &self.session.active,
@@ -84,7 +96,7 @@ impl App {
         }
     }
 
-    pub fn handle_key(&mut self, key: KeyEvent) -> Result<(), SaveError> {
+    fn handle_key(&mut self, key: KeyEvent) -> Result<(), SaveError> {
         match self.mode {
             Mode::Help => {
                 // Any real key dismisses; it does not also act.
@@ -113,7 +125,7 @@ impl App {
             }
             // `Session::toggle`/`delete` no-op on an out-of-range index, so
             // there is no bounds check to duplicate here.
-            KeyCode::Char(' ') | KeyCode::Char('x') => {
+            KeyCode::Char(' ' | 'x') => {
                 let (pane, cursor) = (self.focused, *self.cursor_mut());
                 self.session.toggle(pane, cursor);
             }
@@ -211,7 +223,7 @@ impl App {
         *self.cursor_mut() = target;
     }
 
-    pub fn clamp_cursors(&mut self) {
+    fn clamp_cursors(&mut self) {
         let a = self.session.active.len();
         self.active_cursor = if a == 0 {
             0
@@ -228,7 +240,7 @@ impl App {
 
     /// Keep both panes' scroll offsets consistent with their cursors.
     /// `pane_height` is the full pane height including borders.
-    pub fn adjust_scroll(&mut self, pane_height: u16) {
+    fn adjust_scroll(&mut self, pane_height: u16) {
         let visible = ui::visible_tasks(pane_height);
         clamp_pane(
             &mut self.active_scroll,
@@ -249,7 +261,7 @@ impl App {
     /// The 2-row stride makes the arithmetic fall out for free: integer
     /// division maps a spacer row and the content row beneath it to the same
     /// index, so clicking either selects the task they belong to.
-    pub fn hit_test(&self, col: u16, row: u16) -> Option<Hit> {
+    fn hit_test(&self, col: u16, row: u16) -> Option<Hit> {
         let (pane, rect) = if contains(self.pane_rects.active, col, row) {
             (Pane::Active, self.pane_rects.active)
         } else if contains(self.pane_rects.completed, col, row) {
@@ -281,7 +293,7 @@ impl App {
 
     /// Dispatch a mouse event. `now` is injected so double-click timing is
     /// testable without sleeping.
-    pub fn handle_mouse(&mut self, event: MouseEvent, now: Instant) {
+    fn handle_mouse(&mut self, event: MouseEvent, now: Instant) {
         // The add-task field owns the screen while it is open.
         if self.mode == Mode::AddInput {
             return;
@@ -297,7 +309,7 @@ impl App {
             MouseEventKind::ScrollUp => self.scroll_focused(-1),
             MouseEventKind::ScrollDown => self.scroll_focused(1),
             MouseEventKind::Down(MouseButton::Left) => {
-                self.handle_click(event.column, event.row, now)
+                self.handle_click(event.column, event.row, now);
             }
             _ => {}
         }
@@ -311,15 +323,10 @@ impl App {
         match hit {
             Hit::Pane(pane) => {
                 self.focused = pane;
-                self.last_click = None;
+                self.last_click.reset();
             }
             Hit::Task { pane, index } => {
-                // `Instant` subtraction panics on a negative result; a
-                // monotonic clock makes that unreachable here, but
-                // `saturating_duration_since` states the intent for free.
-                let is_double = self.last_click.is_some_and(|(t, p, i)| {
-                    p == pane && i == index && now.saturating_duration_since(t) <= DOUBLE_CLICK
-                });
+                let is_double = self.last_click.click((pane, index), now);
 
                 self.focused = pane;
                 match pane {
@@ -330,9 +337,6 @@ impl App {
                 if is_double {
                     self.session.toggle(pane, index);
                     self.clamp_cursors();
-                    self.last_click = None;
-                } else {
-                    self.last_click = Some((now, pane, index));
                 }
             }
         }
@@ -349,11 +353,56 @@ impl App {
             *scroll -= 1;
         }
     }
-}
 
-impl App {
+    /// Bound scroll offsets without dragging them back to the cursor — used
+    /// after a wheel event, where the cursor deliberately stays put.
+    fn clamp_scroll_only(&mut self, pane_height: u16) {
+        let visible = ui::visible_tasks(pane_height);
+        let max = |len: usize| {
+            if visible == 0 || len <= visible {
+                0
+            } else {
+                len - visible
+            }
+        };
+        self.active_scroll = self.active_scroll.min(max(self.session.active.len()));
+        self.completed_scroll = self.completed_scroll.min(max(self.session.completed.len()));
+    }
+
+    // --- event loop ---
+
+    /// Apply one input event against a frame of `pane_height` rows.
+    ///
+    /// Split out of [`App::run`] so the dispatch rules — press-only filtering,
+    /// and which scroll clamp pairs with which event — are testable without a
+    /// pty.
+    fn handle_event(
+        &mut self,
+        event: &Event,
+        now: Instant,
+        pane_height: u16,
+    ) -> Result<(), SaveError> {
+        match *event {
+            Event::Key(key) if key.kind == event::KeyEventKind::Press => {
+                // Press-only: terminals that also report releases would
+                // otherwise run every binding twice.
+                self.handle_key(key)?;
+                self.adjust_scroll(pane_height);
+            }
+            Event::Mouse(m) => {
+                self.handle_mouse(m, now);
+                // Wheel scrolling leaves the cursor alone, so the offset is
+                // bounded rather than dragged back to it.
+                self.clamp_scroll_only(pane_height);
+            }
+            // Resize needs no work — the next draw reads the new size.
+            _ => {}
+        }
+        Ok(())
+    }
+
     /// Draw, wait for an event, dispatch, repeat. Auto-saves on the way out.
-    pub fn run(&mut self, tui: &mut Tui) -> anyhow::Result<()> {
+    pub fn run(&mut self, tui: &mut Tui) -> Result<(), RunError> {
         while !self.quit {
             let mut rects = self.pane_rects;
             tui.terminal().draw(|frame| {
@@ -365,20 +414,7 @@ impl App {
             // user is looking at when the next event arrives.
             let pane_height = self.pane_rects.active.height;
 
-            match event::read()? {
-                Event::Key(key) if key.kind == event::KeyEventKind::Press => {
-                    // Press-only: terminals that also report releases would
-                    // otherwise run every binding twice.
-                    self.handle_key(key)?;
-                    self.adjust_scroll(pane_height);
-                }
-                Event::Mouse(m) => {
-                    self.handle_mouse(m, Instant::now());
-                    self.clamp_scroll_only(pane_height);
-                }
-                // Resize needs no work — the next draw reads the new size.
-                _ => {}
-            }
+            self.handle_event(&event::read()?, Instant::now(), pane_height)?;
         }
 
         if self.session.dirty {
@@ -386,21 +422,6 @@ impl App {
             self.session.save(&dir)?;
         }
         Ok(())
-    }
-
-    /// Bound scroll offsets without dragging them back to the cursor — used
-    /// after a wheel event, where the cursor deliberately stays put.
-    pub fn clamp_scroll_only(&mut self, pane_height: u16) {
-        let visible = ui::visible_tasks(pane_height);
-        let max = |len: usize| {
-            if visible == 0 || len <= visible {
-                0
-            } else {
-                len - visible
-            }
-        };
-        self.active_scroll = self.active_scroll.min(max(self.session.active.len()));
-        self.completed_scroll = self.completed_scroll.min(max(self.session.completed.len()));
     }
 }
 
@@ -442,17 +463,7 @@ mod tests {
     use std::time::Duration;
 
     fn app_with(tasks: &[&str]) -> App {
-        let mut session = Session {
-            filename: "x.md".to_string(),
-            timestamp: None,
-            active: Vec::new(),
-            completed: Vec::new(),
-            dirty: false,
-        };
-        for t in tasks {
-            session.add(Pane::Active, t);
-        }
-        session.dirty = false;
+        let session = crate::test_util::session_with(tasks);
         App::new(session, PathBuf::from("/nonexistent"), Palette::new(false))
     }
 
@@ -589,7 +600,7 @@ mod tests {
         for _ in 0..200 {
             press(&mut app, 'x');
         }
-        assert_eq!(app.input.len(), crate::session::MAX_TASK_BYTES);
+        assert_eq!(app.input.len(), crate::model::MAX_TASK_BYTES);
     }
 
     #[test]
@@ -616,7 +627,7 @@ mod tests {
         }
         // 148 + 2 = 150 == MAX_TASK_BYTES, so it must be accepted.
         press(&mut app, 'é');
-        assert_eq!(app.input.len(), crate::session::MAX_TASK_BYTES);
+        assert_eq!(app.input.len(), crate::model::MAX_TASK_BYTES);
         assert!(app.input.ends_with('é'));
     }
 
@@ -718,6 +729,60 @@ mod tests {
             },
         };
         app
+    }
+
+    #[test]
+    fn handle_event_ignores_key_releases() {
+        // Terminals that report releases would otherwise run every binding
+        // twice — 'd' would delete two tasks per keypress.
+        let mut app = app_with(&["a", "b"]);
+        let mut release = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE);
+        release.kind = event::KeyEventKind::Release;
+
+        app.handle_event(&Event::Key(release), Instant::now(), 8)
+            .unwrap();
+        assert_eq!(app.session.active.len(), 2, "release must not delete");
+
+        let mut down = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE);
+        down.kind = event::KeyEventKind::Press;
+        app.handle_event(&Event::Key(down), Instant::now(), 8)
+            .unwrap();
+        assert_eq!(app.session.active.len(), 1, "press must delete");
+    }
+
+    #[test]
+    fn handle_event_ignores_resize() {
+        let mut app = app_with(&["a"]);
+        app.handle_event(&Event::Resize(10, 10), Instant::now(), 8)
+            .unwrap();
+        assert_eq!(app.session.active.len(), 1);
+        assert!(!app.quit);
+    }
+
+    #[test]
+    fn handle_event_pairs_wheel_scroll_with_the_cursor_preserving_clamp() {
+        // A wheel event must bound the offset without dragging it back to the
+        // cursor; a key event does the opposite.
+        let tasks: Vec<String> = (0..10).map(|i| format!("task{i}")).collect();
+        let refs: Vec<&str> = tasks.iter().map(String::as_str).collect();
+        let mut app = app_with(&refs);
+        app.pane_rects = PaneRects {
+            active: ratatui::layout::Rect::new(0, 3, 20, 8),
+            completed: ratatui::layout::Rect::new(20, 3, 20, 8),
+        };
+
+        let wheel = click(MouseEventKind::ScrollDown, 5, 5);
+        app.handle_event(&Event::Mouse(wheel), Instant::now(), 8)
+            .unwrap();
+        assert_eq!(app.active_scroll, 1);
+        assert_eq!(app.active_cursor, 0, "wheel leaves the cursor put");
+
+        // A key event re-syncs the offset to the cursor.
+        let mut key = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
+        key.kind = event::KeyEventKind::Press;
+        app.handle_event(&Event::Key(key), Instant::now(), 8)
+            .unwrap();
+        assert_eq!(app.active_scroll, 0);
     }
 
     fn click(kind: MouseEventKind, col: u16, row: u16) -> MouseEvent {

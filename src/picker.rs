@@ -1,7 +1,9 @@
 //! Resume picker: one screen to choose a past session.
 
+use crate::markdown::count_tasks;
+use crate::storage::FILE_EXTENSION;
 use crate::tui::Tui;
-use crate::ui::Palette;
+use crate::ui::{ClickTracker, Palette};
 use crossterm::event::{self, Event, KeyCode, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -9,9 +11,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{List, ListItem, ListState};
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 /// First screen row occupied by a session entry; the 2-row header sits above.
 const FIRST_ROW: u16 = 2;
 
@@ -22,30 +23,10 @@ pub struct Entry {
     pub total: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Counts {
-    pub open: u32,
-    pub total: u32,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Choice {
     Selected(String),
     Cancelled,
-}
-
-pub fn count_tasks(source: &str) -> Counts {
-    let mut counts = Counts { open: 0, total: 0 };
-    for raw in source.split('\n') {
-        let line = raw.strip_suffix('\r').unwrap_or(raw);
-        if line.starts_with("- [ ] ") {
-            counts.open += 1;
-            counts.total += 1;
-        } else if line.starts_with("- [x] ") {
-            counts.total += 1;
-        }
-    }
-    counts
 }
 
 /// Scan `dir` for session files, newest first. Given the
@@ -58,7 +39,7 @@ pub fn scan(dir: &Path) -> std::io::Result<Vec<Entry>> {
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !name.ends_with(".md") {
+        if !name.ends_with(FILE_EXTENSION) {
             continue;
         }
         // A file deleted between listing and reading is skipped, not fatal.
@@ -93,7 +74,7 @@ pub fn filter_visible(entries: &[Entry], show_all: bool) -> Vec<&Entry> {
 /// make `&stem[14..16]` slice mid-sequence and panic. `is_char_boundary`
 /// turns that crash into a pass-through.
 pub fn pretty_name(name: &str) -> String {
-    let stem = name.strip_suffix(".md").unwrap_or(name);
+    let stem = name.strip_suffix(FILE_EXTENSION).unwrap_or(name);
     let b = stem.as_bytes();
     if stem.len() >= 16
         && b[4] == b'-'
@@ -113,11 +94,11 @@ pub fn pretty_name(name: &str) -> String {
     name.to_string()
 }
 
-pub fn run(dir: &Path, tui: &mut Tui, palette: Palette) -> anyhow::Result<Choice> {
+pub fn run(dir: &Path, tui: &mut Tui, palette: Palette) -> std::io::Result<Choice> {
     let entries = scan(dir)?;
     let mut cursor = 0usize;
     let mut show_all = false;
-    let mut last_click: Option<(Instant, usize)> = None;
+    let mut last_click = ClickTracker::default();
 
     loop {
         let visible = filter_visible(&entries, show_all);
@@ -169,7 +150,7 @@ fn handle_mouse(
     m: MouseEvent,
     visible: &[&Entry],
     cursor: &mut usize,
-    last_click: &mut Option<(Instant, usize)>,
+    last_click: &mut ClickTracker<usize>,
     now: Instant,
 ) -> Option<Choice> {
     if !matches!(m.kind, MouseEventKind::Down(MouseButton::Left)) {
@@ -181,16 +162,10 @@ fn handle_mouse(
     let index = (m.row - FIRST_ROW) as usize;
     let entry = visible.get(index)?;
 
-    let is_double = last_click.is_some_and(|(t, i)| i == index && now - t <= DOUBLE_CLICK);
+    let is_double = last_click.click(index, now);
     *cursor = index;
 
-    if is_double {
-        *last_click = None;
-        Some(Choice::Selected(entry.name.clone()))
-    } else {
-        *last_click = Some((now, index));
-        None
-    }
+    is_double.then(|| Choice::Selected(entry.name.clone()))
 }
 
 fn draw(frame: &mut Frame, visible: &[&Entry], cursor: usize, show_all: bool, palette: Palette) {
@@ -259,21 +234,6 @@ mod tests {
             open,
             total,
         }
-    }
-
-    #[test]
-    fn count_tasks_counts_open_and_total() {
-        let src = "# Session 2026-05-31 14:30\n## Active\n- [ ] a\n- [ ] b\n## Completed\n- [x] c\n- [x] d\n- [x] e\n";
-        let c = count_tasks(src);
-        assert_eq!(c.open, 2);
-        assert_eq!(c.total, 5);
-    }
-
-    #[test]
-    fn count_tasks_ignores_prose() {
-        let c = count_tasks("just some text\n- not a task\n");
-        assert_eq!(c.open, 0);
-        assert_eq!(c.total, 0);
     }
 
     #[test]

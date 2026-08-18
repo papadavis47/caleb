@@ -1,7 +1,12 @@
 [package]
 name = "caleb"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
+rust-version = "1.90"
+description = "Ex Machina inspired TUI task tracker for coding sessions"
+license = "MIT"
+repository = "https://github.com/papadavis47/caleb"
+readme = "README.md"
 
 [dependencies]
 anyhow = "1.0.104"
@@ -12,4 +17,23 @@ ratatui = "0.30.2"
 thiserror = "2.0.20"
 
 [dev-dependencies]
+assert_cmd = "2.2.2"
+predicates = "3.1.4"
 tempfile = "3.27.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# storage::from_civil narrows jiff's civil-date fields on purpose; the ranges
+# are bounded by the calendar, not by the integer type.
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+# Error types are self-describing via thiserror; a prose section per fn would
+# restate the enum.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+# This is a binary, not a library — nothing downstream can ignore a return
+# value, so #[must_use] is noise here.
+must_use_candidate = "allow"

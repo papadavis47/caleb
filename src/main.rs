@@ -1,24 +1,34 @@
-//! caleb — track tasks for a coding session.
+//! Binary entry point: CLI parsing and top-level dispatch.
 //!
-//! Named for Caleb Smith in *Ex Machina*.
-
-mod app;
-mod markdown;
-mod picker;
-mod session;
-mod storage;
-mod tui;
-mod ui;
+//! Everything with logic in it lives in the library crate so that tests and
+//! doctests can reach it; this file only decides which entry point to call.
 
 use anyhow::{Context, Result, bail};
+use caleb::{app, picker, session, storage, tui, ui};
 use clap::Parser;
 use std::path::Path;
+
+/// Help layout: name, version, and description lead, and the repository URL
+/// trails the options.
+///
+/// The pieces come from `CARGO_PKG_*` rather than string literals so the help
+/// text cannot drift from `Cargo.toml` the way the hardcoded `about` did.
+const HELP_TEMPLATE: &str = "\
+{name} {version}
+{about}
+
+{usage-heading} {usage}
+
+{all-args}{after-help}
+";
 
 #[derive(Parser, Debug)]
 #[command(
     name = "caleb",
     version,
-    about = "Track tasks for a coding session",
+    about = env!("CARGO_PKG_DESCRIPTION"),
+    help_template = HELP_TEMPLATE,
+    after_help = concat!("Repository: ", env!("CARGO_PKG_REPOSITORY")),
     // caleb wants -v for version; clap defaults to -V, so wire it by hand.
     disable_version_flag = true
 )]
@@ -57,9 +67,11 @@ fn main() -> Result<()> {
     let mut tui = tui::Tui::new().context("cannot initialize the terminal")?;
 
     let session = if cli.resume {
-        match picker::run(&dir, &mut tui, palette)? {
+        match picker::run(&dir, &mut tui, palette).context("session picker failed")? {
             picker::Choice::Cancelled => return Ok(()),
-            picker::Choice::Selected(name) => resume(&dir, &name)?,
+            picker::Choice::Selected(name) => {
+                session::resume(&dir, &name, storage::timestamp_now())?
+            }
         }
     } else {
         session::create_new(&dir, storage::timestamp_now())
@@ -67,25 +79,7 @@ fn main() -> Result<()> {
     };
 
     let mut app = app::App::new(session, dir, palette);
-    app.run(&mut tui)
-}
-
-/// Rename the picked file to now() and load it, so resumed work continues
-/// under a fresh timestamp. The old name goes away.
-fn resume(dir: &Path, original: &str) -> Result<session::Session> {
-    let ts = storage::timestamp_now();
-    let stem = storage::format_file_stem(ts);
-    let new_name = storage::unique_filename(dir, &stem, storage::FILE_EXTENSION)?;
-
-    if original != new_name {
-        std::fs::rename(dir.join(original), dir.join(&new_name))
-            .with_context(|| format!("cannot rename '{original}' to '{new_name}'"))?;
-    }
-
-    let mut loaded = session::Session::load(dir, &new_name)
-        .with_context(|| format!("cannot load session '{new_name}'"))?;
-    loaded.timestamp = Some(ts);
-    Ok(loaded)
+    app.run(&mut tui).context("session ended abnormally")
 }
 
 fn print_session_list(dir: &Path) -> Result<()> {

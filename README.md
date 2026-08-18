@@ -31,7 +31,7 @@ editor or renderer. Linux, terminal, mouse-aware.
 
 ## Install
 
-Requires Rust 1.97 (edition 2024).
+Requires Rust 1.90 or newer (edition 2024).
 
 ```sh
 cargo install --path .

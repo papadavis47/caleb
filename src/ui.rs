@@ -5,21 +5,63 @@
 //! cells — which is also why tests can assert against a `TestBackend` buffer
 //! instead of a real terminal.
 
-use crate::session::{Pane, Task, Timestamp};
+use crate::model::{Pane, Task, Timestamp};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, ListState, Padding, Paragraph};
+use std::time::{Duration, Instant};
 
 /// Below this, draw only a "terminal too small" message.
-pub const MIN_ROWS: u16 = 8;
-pub const MIN_COLS: u16 = 30;
+const MIN_ROWS: u16 = 10;
+const MIN_COLS: u16 = 30;
 
 /// Rows each task occupies: one blank spacer plus one content row, so items
 /// read as visually separated.
 pub const ROW_STRIDE: u16 = 2;
+
+/// Two clicks on the same target within this window count as a double click.
+pub const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+
+/// Tracks repeat clicks on the same target. `K` identifies whatever "the same
+/// target" means to the caller — a row index in the picker, a (pane, index)
+/// pair in the main view.
+///
+/// Rust note: `saturating_duration_since` rather than `now - t`, because
+/// `Instant` subtraction panics when the result would be negative. A monotonic
+/// clock makes that unreachable, but stating it costs nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClickTracker<K> {
+    last: Option<(Instant, K)>,
+}
+
+/// Written out rather than derived: `#[derive(Default)]` would add a spurious
+/// `K: Default` bound, and `Pane` has no sensible default.
+impl<K> Default for ClickTracker<K> {
+    fn default() -> Self {
+        Self { last: None }
+    }
+}
+
+impl<K: Copy + PartialEq> ClickTracker<K> {
+    /// Record a click on `key`, returning `true` if it completes a double
+    /// click. A completed double click resets the tracker, so three rapid
+    /// clicks register as one double click and one single, not two.
+    pub fn click(&mut self, key: K, now: Instant) -> bool {
+        let is_double = self
+            .last
+            .is_some_and(|(t, k)| k == key && now.saturating_duration_since(t) <= DOUBLE_CLICK);
+        self.last = if is_double { None } else { Some((now, key)) };
+        is_double
+    }
+
+    /// Forget the pending click, so the next one cannot pair with it.
+    pub fn reset(&mut self) {
+        self.last = None;
+    }
+}
 
 const STATUS_TEXT: &str = " a add  d delete  space toggle  J/K move  s save  q quit  ? help";
 
@@ -49,12 +91,12 @@ pub struct Palette {
 
 impl Palette {
     /// When color is disabled, every slot becomes `Color::Reset` — but
-    /// callers keep applying BOLD/DIM/REVERSED/CROSSED_OUT, which are
+    /// callers keep applying `BOLD/DIM/REVERSED/CROSSED_OUT`, which are
     /// attributes rather than colors and stay useful without them.
     pub fn new(color_enabled: bool) -> Self {
         if color_enabled {
             Self {
-                accent: Color::Indexed(47),
+                accent: Color::Indexed(40),
                 muted: Color::Indexed(240),
                 help: Color::Indexed(177),
                 warn: Color::Indexed(221),
@@ -129,7 +171,11 @@ pub fn draw(frame: &mut Frame, state: &ViewState) -> PaneRects {
         Overlay::None | Overlay::Help => 1,
     };
 
-    let [header_area, panes_area, bottom_area] = Layout::vertical([
+    // One blank row above and below the header gives the top line a little
+    // breathing room before the pane borders.
+    let [_, header_area, _, panes_area, bottom_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(0),
         Constraint::Length(bottom),
@@ -159,10 +205,7 @@ fn draw_header(frame: &mut Frame, state: &ViewState, area: Rect) {
 
     if let Some(ts) = state.timestamp {
         spans.push(Span::styled(
-            format!(
-                "· {:04}-{:02}-{:02} {:02}:{:02} ",
-                ts.year, ts.month, ts.day, ts.hour, ts.minute
-            ),
+            format!("· {ts} "),
             Style::default().add_modifier(Modifier::BOLD),
         ));
     }
@@ -267,7 +310,7 @@ fn draw_status_bar(frame: &mut Frame, _state: &ViewState, area: Rect) {
 
 /// Key reference shown by `?`. Each line is padded to 52 columns so the box
 /// has a straight right edge.
-pub const HELP_LINES: &[&str] = &[
+const HELP_LINES: &[&str] = &[
     " caleb — key reference                              ",
     "                                                    ",
     " Navigation                                         ",
@@ -382,15 +425,9 @@ fn draw_help_overlay(frame: &mut Frame, state: &ViewState, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::task;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-
-    fn task(text: &str, done: bool) -> Task {
-        Task {
-            text: text.to_string(),
-            done,
-        }
-    }
 
     fn render(width: u16, height: u16, state: &ViewState) -> ratatui::buffer::Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -423,6 +460,42 @@ mod tests {
     }
 
     #[test]
+    fn click_tracker_pairs_only_same_target_within_the_window() {
+        let t0 = Instant::now();
+        let mut tracker = ClickTracker::default();
+
+        assert!(!tracker.click(1usize, t0), "first click is never a double");
+        assert!(tracker.click(1usize, t0 + Duration::from_millis(100)));
+
+        // Same target, but too slow.
+        assert!(!tracker.click(2usize, t0));
+        assert!(!tracker.click(2usize, t0 + DOUBLE_CLICK + Duration::from_millis(1)));
+
+        // Fast enough, but a different target.
+        assert!(!tracker.click(3usize, t0));
+        assert!(!tracker.click(4usize, t0 + Duration::from_millis(10)));
+    }
+
+    #[test]
+    fn click_tracker_resets_after_a_double_so_triples_do_not_chain() {
+        let t0 = Instant::now();
+        let mut tracker = ClickTracker::default();
+        assert!(!tracker.click(1usize, t0));
+        assert!(tracker.click(1usize, t0 + Duration::from_millis(10)));
+        // Third rapid click starts a new pair rather than firing again.
+        assert!(!tracker.click(1usize, t0 + Duration::from_millis(20)));
+    }
+
+    #[test]
+    fn click_tracker_reset_breaks_the_pending_pair() {
+        let t0 = Instant::now();
+        let mut tracker = ClickTracker::default();
+        assert!(!tracker.click(1usize, t0));
+        tracker.reset();
+        assert!(!tracker.click(1usize, t0 + Duration::from_millis(10)));
+    }
+
+    #[test]
     fn too_small_terminal_shows_fallback() {
         let buf = render(40, 4, &base(&[], &[]));
         assert!(row(&buf, 0).contains("terminal too small"));
@@ -446,7 +519,7 @@ mod tests {
         });
         let buf = render(60, 10, &s);
         assert_eq!(
-            row(&buf, 0).trim_end(),
+            row(&buf, 1).trim_end(),
             " caleb · 2026-05-31 14:30 · 0 active / 0 done"
         );
     }
@@ -456,19 +529,19 @@ mod tests {
         let mut s = base(&[], &[]);
         s.dirty = true;
         let buf = render(60, 10, &s);
-        assert!(row(&buf, 0).contains("•unsaved"));
+        assert!(row(&buf, 1).contains("•unsaved"));
     }
 
     #[test]
     fn pane_borders_carry_titles_with_mixed_weight_corners() {
         let buf = render(40, 10, &base(&[], &[]));
-        assert_eq!(row(&buf, 1), "┍─ Active ─────────┑┍─ Completed ──────┑");
+        assert_eq!(row(&buf, 3), "┍─ Active ─────────┑┍─ Completed ──────┑");
     }
 
     #[test]
     fn pane_vertical_borders_are_continuous() {
         let buf = render(40, 10, &base(&[], &[]));
-        for y in 2..8 {
+        for y in 4..8 {
             for x in [0, 19, 20, 39] {
                 assert_eq!(buf[(x, y)].symbol(), "┃");
             }
@@ -480,18 +553,18 @@ mod tests {
         let active = [task("first thing", false)];
         let completed = [task("done thing", true)];
         let buf = render(40, 10, &base(&active, &completed));
-        // Row 2 is the spacer, row 3 the first task's content.
-        assert_eq!(row(&buf, 2), "┃                  ┃┃                  ┃");
-        assert!(row(&buf, 3).contains("  first thing"));
-        assert!(row(&buf, 3).contains("✓ done thing"));
+        // Row 4 is the spacer, row 5 the first task's content.
+        assert_eq!(row(&buf, 4), "┃                  ┃┃                  ┃");
+        assert!(row(&buf, 5).contains("  first thing"));
+        assert!(row(&buf, 5).contains("✓ done thing"));
     }
 
     #[test]
     fn cursor_row_is_reversed_and_spacer_is_not() {
         let active = [task("first thing", false)];
         let buf = render(40, 10, &base(&active, &[]));
-        assert!(buf[(3u16, 3u16)].modifier.contains(Modifier::REVERSED));
-        assert!(!buf[(3u16, 2u16)].modifier.contains(Modifier::REVERSED));
+        assert!(buf[(3u16, 5u16)].modifier.contains(Modifier::REVERSED));
+        assert!(!buf[(3u16, 4u16)].modifier.contains(Modifier::REVERSED));
     }
 
     #[test]
@@ -500,7 +573,7 @@ mod tests {
         let mut s = base(&[], &completed);
         s.focused = Pane::Active;
         let buf = render(40, 10, &s);
-        let cell = &buf[(22u16, 3u16)];
+        let cell = &buf[(22u16, 5u16)];
         assert!(cell.modifier.contains(Modifier::DIM));
         assert!(cell.modifier.contains(Modifier::CROSSED_OUT));
     }
@@ -508,8 +581,8 @@ mod tests {
     #[test]
     fn focused_pane_uses_accent_and_unfocused_uses_muted() {
         let buf = render(40, 10, &base(&[], &[]));
-        assert_eq!(buf[(0u16, 1u16)].fg, Color::Indexed(47));
-        assert_eq!(buf[(20u16, 1u16)].fg, Color::Indexed(240));
+        assert_eq!(buf[(0u16, 3u16)].fg, Color::Indexed(40));
+        assert_eq!(buf[(20u16, 3u16)].fg, Color::Indexed(240));
     }
 
     #[test]
@@ -524,7 +597,7 @@ mod tests {
     #[test]
     fn odd_width_gives_the_extra_column_to_the_right_pane() {
         let buf = render(41, 10, &base(&[], &[]));
-        let line = row(&buf, 1);
+        let line = row(&buf, 3);
         // Left pane is 20 cols, right pane 21.
         assert_eq!(line.chars().nth(20).unwrap(), '┍');
     }
@@ -536,9 +609,9 @@ mod tests {
         s.palette = Palette::new(false);
         let buf = render(40, 10, &s);
         // Border color gone...
-        assert_eq!(buf[(0u16, 1u16)].fg, Color::Reset);
+        assert_eq!(buf[(0u16, 3u16)].fg, Color::Reset);
         // ...but the cursor is still visible.
-        assert!(buf[(3u16, 3u16)].modifier.contains(Modifier::REVERSED));
+        assert!(buf[(3u16, 5u16)].modifier.contains(Modifier::REVERSED));
     }
 
     #[test]
@@ -548,12 +621,12 @@ mod tests {
         s.active_scroll = 4;
         s.active_cursor = 4;
         let buf = render(40, 10, &s);
-        assert!(row(&buf, 3).contains("task4"));
+        assert!(row(&buf, 5).contains("task4"));
     }
 
     #[test]
     fn visible_tasks_halves_the_inner_height() {
-        // A 10-row terminal: 1 header + 1 status = 8 pane rows, 6 inner.
+        // A 12-row terminal: 3 header rows + 1 status = 8 pane rows, 6 inner.
         assert_eq!(visible_tasks(8), 3);
         assert_eq!(visible_tasks(2), 0);
     }
@@ -563,7 +636,8 @@ mod tests {
         let mut s = base(&[], &[]);
         s.overlay = Overlay::Input("hi");
         let buf = render(40, 10, &s);
-        // 10 rows, 0-indexed: header 0, panes 1..=5, field 6/7/8, blank 9.
+        // 10 rows, 0-indexed: blank 0, header 1, blank 2, panes 3..=5,
+        // field 6/7/8, blank 9.
         // The pane bottom border sits on row 5.
         assert!(row(&buf, 5).starts_with('┕'));
         assert!(row(&buf, 6).starts_with("╭─ Add task "));
@@ -588,7 +662,7 @@ mod tests {
         s.overlay = Overlay::Input("x");
         let buf = render(40, 10, &s);
         // Field top-left corner: row 6, column 0.
-        assert_eq!(buf[(0u16, 6u16)].fg, Color::Indexed(47));
+        assert_eq!(buf[(0u16, 6u16)].fg, Color::Indexed(40));
     }
 
     #[test]
