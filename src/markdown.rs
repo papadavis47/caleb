@@ -99,6 +99,39 @@ fn parse_header(line: &str) -> Option<Timestamp> {
     Some(ts)
 }
 
+/// Open and total task counts for a session file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TaskCounts {
+    pub open: u32,
+    pub total: u32,
+}
+
+/// Count tasks without fully parsing, for the resume picker's summary column.
+///
+/// Deliberately more tolerant than [`parse`]: a hand-edited file with an
+/// over-long task still counts, where `parse` would reject the whole file.
+/// A session must never vanish from the picker just because it cannot be
+/// opened — the user needs to see it in order to fix it.
+///
+/// ```
+/// # use caleb::markdown::count_tasks;
+/// let counts = count_tasks("- [ ] todo\n- [x] done\n");
+/// assert_eq!((counts.open, counts.total), (1, 2));
+/// ```
+pub fn count_tasks(source: &str) -> TaskCounts {
+    let mut counts = TaskCounts { open: 0, total: 0 };
+    for raw in source.split('\n') {
+        let line = raw.strip_suffix('\r').unwrap_or(raw);
+        if let Some((_, done)) = parse_task_line(line) {
+            counts.total += 1;
+            if !done {
+                counts.open += 1;
+            }
+        }
+    }
+    counts
+}
+
 fn parse_task_line(line: &str) -> Option<(&str, bool)> {
     if let Some(text) = line.strip_prefix("- [ ] ") {
         return Some((text, false));
@@ -115,11 +148,7 @@ pub fn serialize(timestamp: Option<Timestamp>, active: &[Task], completed: &[Tas
 
     match timestamp {
         Some(ts) => {
-            let _ = writeln!(
-                out,
-                "# Session {:04}-{:02}-{:02} {:02}:{:02}\n",
-                ts.year, ts.month, ts.day, ts.hour, ts.minute
-            );
+            let _ = writeln!(out, "# Session {ts}\n");
         }
         None => out.push_str("# Session\n\n"),
     }
@@ -138,6 +167,32 @@ pub fn serialize(timestamp: Option<Timestamp>, active: &[Task], completed: &[Tas
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn count_tasks_counts_open_and_total() {
+        let src = "# Session 2026-05-31 14:30\n## Active\n- [ ] a\n- [ ] b\n## Completed\n- [x] c\n- [x] d\n- [x] e\n";
+        let c = count_tasks(src);
+        assert_eq!(c.open, 2);
+        assert_eq!(c.total, 5);
+    }
+
+    #[test]
+    fn count_tasks_ignores_prose() {
+        let c = count_tasks("just some text\n- not a task\n");
+        assert_eq!(c.open, 0);
+        assert_eq!(c.total, 0);
+    }
+
+    #[test]
+    fn count_tasks_tolerates_lines_that_parse_would_reject() {
+        // The picker must still list a session whose file has a hand-edited
+        // over-long task, even though `parse` refuses to open it.
+        let src = format!("- [ ] {}\n- [x] ok\n", "x".repeat(MAX_TASK_BYTES + 1));
+        assert!(parse(&src).is_err());
+        let c = count_tasks(&src);
+        assert_eq!(c.open, 1);
+        assert_eq!(c.total, 2);
+    }
 
     fn task(text: &str, done: bool) -> Task {
         Task {

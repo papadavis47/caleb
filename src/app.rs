@@ -7,14 +7,12 @@
 use crate::model::{MAX_TASK_BYTES, Pane};
 use crate::session::{SaveError, Session};
 use crate::tui::Tui;
-use crate::ui::{self, Overlay, Palette, PaneRects, ViewState};
+use crate::ui::{self, ClickTracker, Overlay, Palette, PaneRects, ViewState};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// Two clicks on the same task within this window count as a double-click.
-pub const DOUBLE_CLICK: Duration = Duration::from_millis(400);
-
 /// What a screen coordinate resolves to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hit {
@@ -43,7 +41,7 @@ pub struct App {
     pub quit: bool,
     /// Pane geometry from the last frame, for mouse hit-testing.
     pub pane_rects: PaneRects,
-    pub last_click: Option<(Instant, Pane, usize)>,
+    pub last_click: ClickTracker<(Pane, usize)>,
 }
 
 impl App {
@@ -61,7 +59,7 @@ impl App {
             input: String::new(),
             quit: false,
             pane_rects: PaneRects::default(),
-            last_click: None,
+            last_click: ClickTracker::default(),
         }
     }
 
@@ -312,15 +310,10 @@ impl App {
         match hit {
             Hit::Pane(pane) => {
                 self.focused = pane;
-                self.last_click = None;
+                self.last_click.reset();
             }
             Hit::Task { pane, index } => {
-                // `Instant` subtraction panics on a negative result; a
-                // monotonic clock makes that unreachable here, but
-                // `saturating_duration_since` states the intent for free.
-                let is_double = self.last_click.is_some_and(|(t, p, i)| {
-                    p == pane && i == index && now.saturating_duration_since(t) <= DOUBLE_CLICK
-                });
+                let is_double = self.last_click.click((pane, index), now);
 
                 self.focused = pane;
                 match pane {
@@ -331,9 +324,6 @@ impl App {
                 if is_double {
                     self.session.toggle(pane, index);
                     self.clamp_cursors();
-                    self.last_click = None;
-                } else {
-                    self.last_click = Some((now, pane, index));
                 }
             }
         }

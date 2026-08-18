@@ -12,6 +12,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, ListState, Padding, Paragraph};
+use std::time::{Duration, Instant};
 
 /// Below this, draw only a "terminal too small" message.
 pub const MIN_ROWS: u16 = 10;
@@ -20,6 +21,47 @@ pub const MIN_COLS: u16 = 30;
 /// Rows each task occupies: one blank spacer plus one content row, so items
 /// read as visually separated.
 pub const ROW_STRIDE: u16 = 2;
+
+/// Two clicks on the same target within this window count as a double click.
+pub const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+
+/// Tracks repeat clicks on the same target. `K` identifies whatever "the same
+/// target" means to the caller — a row index in the picker, a (pane, index)
+/// pair in the main view.
+///
+/// Rust note: `saturating_duration_since` rather than `now - t`, because
+/// `Instant` subtraction panics when the result would be negative. A monotonic
+/// clock makes that unreachable, but stating it costs nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClickTracker<K> {
+    last: Option<(Instant, K)>,
+}
+
+/// Written out rather than derived: `#[derive(Default)]` would add a spurious
+/// `K: Default` bound, and `Pane` has no sensible default.
+impl<K> Default for ClickTracker<K> {
+    fn default() -> Self {
+        Self { last: None }
+    }
+}
+
+impl<K: Copy + PartialEq> ClickTracker<K> {
+    /// Record a click on `key`, returning `true` if it completes a double
+    /// click. A completed double click resets the tracker, so three rapid
+    /// clicks register as one double click and one single, not two.
+    pub fn click(&mut self, key: K, now: Instant) -> bool {
+        let is_double = self
+            .last
+            .is_some_and(|(t, k)| k == key && now.saturating_duration_since(t) <= DOUBLE_CLICK);
+        self.last = if is_double { None } else { Some((now, key)) };
+        is_double
+    }
+
+    /// Forget the pending click, so the next one cannot pair with it.
+    pub fn reset(&mut self) {
+        self.last = None;
+    }
+}
 
 const STATUS_TEXT: &str = " a add  d delete  space toggle  J/K move  s save  q quit  ? help";
 
@@ -163,10 +205,7 @@ fn draw_header(frame: &mut Frame, state: &ViewState, area: Rect) {
 
     if let Some(ts) = state.timestamp {
         spans.push(Span::styled(
-            format!(
-                "· {:04}-{:02}-{:02} {:02}:{:02} ",
-                ts.year, ts.month, ts.day, ts.hour, ts.minute
-            ),
+            format!("· {ts} "),
             Style::default().add_modifier(Modifier::BOLD),
         ));
     }
@@ -424,6 +463,42 @@ mod tests {
             palette: Palette::new(true),
             overlay: Overlay::None,
         }
+    }
+
+    #[test]
+    fn click_tracker_pairs_only_same_target_within_the_window() {
+        let t0 = Instant::now();
+        let mut tracker = ClickTracker::default();
+
+        assert!(!tracker.click(1usize, t0), "first click is never a double");
+        assert!(tracker.click(1usize, t0 + Duration::from_millis(100)));
+
+        // Same target, but too slow.
+        assert!(!tracker.click(2usize, t0));
+        assert!(!tracker.click(2usize, t0 + DOUBLE_CLICK + Duration::from_millis(1)));
+
+        // Fast enough, but a different target.
+        assert!(!tracker.click(3usize, t0));
+        assert!(!tracker.click(4usize, t0 + Duration::from_millis(10)));
+    }
+
+    #[test]
+    fn click_tracker_resets_after_a_double_so_triples_do_not_chain() {
+        let t0 = Instant::now();
+        let mut tracker = ClickTracker::default();
+        assert!(!tracker.click(1usize, t0));
+        assert!(tracker.click(1usize, t0 + Duration::from_millis(10)));
+        // Third rapid click starts a new pair rather than firing again.
+        assert!(!tracker.click(1usize, t0 + Duration::from_millis(20)));
+    }
+
+    #[test]
+    fn click_tracker_reset_breaks_the_pending_pair() {
+        let t0 = Instant::now();
+        let mut tracker = ClickTracker::default();
+        assert!(!tracker.click(1usize, t0));
+        tracker.reset();
+        assert!(!tracker.click(1usize, t0 + Duration::from_millis(10)));
     }
 
     #[test]
