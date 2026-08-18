@@ -13,5 +13,7 @@ pub mod model;
 pub mod picker;
 pub mod session;
 pub mod storage;
+#[cfg(test)]
+pub(crate) mod test_util;
 pub mod tui;
 pub mod ui;

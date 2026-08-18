@@ -425,15 +425,9 @@ fn draw_help_overlay(frame: &mut Frame, state: &ViewState, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::task;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-
-    fn task(text: &str, done: bool) -> Task {
-        Task {
-            text: text.to_string(),
-            done,
-        }
-    }
 
     fn render(width: u16, height: u16, state: &ViewState) -> ratatui::buffer::Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();

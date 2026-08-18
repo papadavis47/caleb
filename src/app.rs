@@ -463,17 +463,7 @@ mod tests {
     use std::time::Duration;
 
     fn app_with(tasks: &[&str]) -> App {
-        let mut session = Session {
-            filename: "x.md".to_string(),
-            timestamp: None,
-            active: Vec::new(),
-            completed: Vec::new(),
-            dirty: false,
-        };
-        for t in tasks {
-            session.add(Pane::Active, t);
-        }
-        session.dirty = false;
+        let session = crate::test_util::session_with(tasks);
         App::new(session, PathBuf::from("/nonexistent"), Palette::new(false))
     }
 

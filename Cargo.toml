@@ -17,6 +17,8 @@ ratatui = "0.30.2"
 thiserror = "2.0.20"
 
 [dev-dependencies]
+assert_cmd = "2.2.2"
+predicates = "3.1.4"
 tempfile = "3.27.0"
 
 [lints.rust]

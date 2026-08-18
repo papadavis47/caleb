@@ -15,9 +15,12 @@ focused on (in priority order):
    frees it: no allocator threaded through the API, no manual cleanup paired
    with every allocation.
 2. **Error handling** — `thiserror` for typed module errors, `#[from]` so `?`
-   widens them at module boundaries, `anyhow` with `.context()` only at the
-   `main` boundary.
-3. **In-file testing** — every module keeps a `#[cfg(test)] mod tests` block.
+   widens them at module boundaries, `anyhow` with `.context()` only in
+   `main.rs`. The library never returns `anyhow`: `App::run` yields `RunError`
+   and `picker::run` yields `io::Result`.
+3. **In-file testing** — every module keeps a `#[cfg(test)] mod tests` block,
+   with cross-module seams covered by `tests/` and shared fixtures in
+   `src/test_util.rs`.
    Pure domain logic is tested directly; `ui` is tested against a
    `TestBackend` buffer, never a real terminal.
 
@@ -41,7 +44,8 @@ else. `learning/` is untracked personal material; ignore it unless asked.
 
 ## Status
 
-v1 complete. 104 in-file tests pass under `cargo test`. Smoke-tested through
+v1 complete. 130+ tests pass under `cargo test` (unit, integration, and
+doctests). Smoke-tested through
 a pty end-to-end: create session → add tasks → toggle → save → quit → `-r` →
 rename to now() → load → re-save.
 
@@ -50,14 +54,23 @@ rename to now() → load → re-save.
 | File | Responsibility |
 |---|---|
 | `src/main.rs` | clap CLI, storage dir setup, dispatch, anyhow reporting, `--list` |
+| `src/lib.rs` | module declarations; everything with logic lives under it |
+| `src/model.rs` | `Task`, `Timestamp` (+ `Display`), `Pane`, `MAX_TASK_BYTES`; no deps |
 | `src/tui.rs` | crossterm raw mode / alt screen / mouse capture, RAII guard, panic hook |
 | `src/app.rs` | event loop, view state, key + mouse dispatch, scroll clamping |
-| `src/session.rs` | `Task`, `Timestamp`, `Pane`, `Session`; create / load / save; mutations |
-| `src/markdown.rs` | `parse` / `serialize`, `ParseError` |
+| `src/session.rs` | `Session`; create / load / save / resume; mutations |
+| `src/markdown.rs` | `parse` / `serialize` / `count_tasks`, `ParseError` |
 | `src/storage.rs` | XDG resolution, timestamps, file stems, collision suffixes |
-| `src/ui.rs` | palette, frame layout, panes, status bar, input bar, help overlay |
-| `src/picker.rs` | `-r` screen: scan, count, filter, draw, selection loop |
+| `src/ui.rs` | palette, frame layout, panes, status bar, input bar, help overlay, `ClickTracker` |
+| `src/picker.rs` | `-r` screen: scan, filter, draw, selection loop |
+| `src/test_util.rs` | `cfg(test)` fixtures shared across module test blocks |
+| `tests/roundtrip.rs` | persistence across module seams, public API only |
+| `tests/cli.rs` | binary behavior: `--list`, `--help`, non-TTY failures |
 | `scripts/smoke.py` | pty end-to-end test |
+
+Dependencies point one way: `model` has none, `markdown` and `storage` depend
+only on `model`, `session` composes them, and `ui`/`app`/`picker` sit at the
+terminal edge. There are no cycles — keep it that way.
 
 `app` never touches the terminal, which is what makes every binding testable
 without a pty. `ui::draw` is a pure function from `ViewState` to a buffer.
@@ -144,7 +157,7 @@ also report releases run every binding twice.
   `┃` verticals and matching mixed-weight corners. The heavier glyph avoids
   row-boundary gaps in terminal fonts.
 - **Color palette** lives in `ui::Palette`, 256-color indices only: `accent`
-  47 (matrix green) for the focused border and input box, `muted` 240 (dim
+  40 (a muted green) for the focused border and input box, `muted` 240 (dim
   gray) for unfocused panes, `help` 177 (orchid) for the help overlay, `warn`
   221 (gold) for the unsaved marker. Retuning the look = one line per slot.
 - **2-row stride** — each task is a blank spacer row followed by a content
@@ -155,7 +168,7 @@ also report releases run every binding twice.
   tmux/powerline status lines that overlay the last row.
 - **Help overlay** — centered, 1 row of vertical and 1 column of horizontal
   padding between text and border.
-- **Minimums** — below 8 rows or 30 cols, draw only "terminal too small".
+- **Minimums** — below 10 rows or 30 cols, draw only "terminal too small".
 - **NO_COLOR** honored: palette slots become `Color::Reset`, but
   `BOLD`/`DIM`/`REVERSED`/`CROSSED_OUT` are kept so the cursor stays visible.
 

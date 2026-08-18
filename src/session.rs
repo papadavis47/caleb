@@ -203,16 +203,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn empty_session() -> Session {
-        Session {
-            filename: "x.md".to_string(),
-            timestamp: None,
-            active: Vec::new(),
-            completed: Vec::new(),
-            dirty: false,
-        }
-    }
+    use crate::test_util::empty_session;
 
     #[test]
     fn add_then_delete_restores_count() {

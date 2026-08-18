@@ -79,6 +79,13 @@ impl Pane {
 /// character in half. Rust's `&str` is guaranteed valid UTF-8, so that slice
 /// panics rather than printing mojibake — the type system forces us to walk
 /// back to a boundary.
+///
+/// ```
+/// # use caleb::model::truncate_on_char_boundary;
+/// assert_eq!(truncate_on_char_boundary("hello", 10), "hello");
+/// // 'é' is two bytes, so a three-byte budget drops it rather than splitting.
+/// assert_eq!(truncate_on_char_boundary("abé", 3), "ab");
+/// ```
 pub fn truncate_on_char_boundary(s: &str, max: usize) -> &str {
     if s.len() <= max {
         return s;

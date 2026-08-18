@@ -25,6 +25,18 @@ enum Section {
     Completed,
 }
 
+/// Parse a session file into its header timestamp and two task lists.
+///
+/// Tasks appearing before any heading default to the active pane — recovering
+/// a hand-edited file beats rejecting it. Over-long tasks are the one hard
+/// error; see [`count_tasks`] for the tolerant path the picker uses.
+///
+/// ```
+/// # use caleb::markdown::parse;
+/// let p = parse("# Session 2026-05-31 14:30\n\n## Active\n\n- [ ] a\n").unwrap();
+/// assert_eq!(p.active.len(), 1);
+/// assert_eq!(p.timestamp.unwrap().to_string(), "2026-05-31 14:30");
+/// ```
 pub fn parse(source: &str) -> Result<Parsed, ParseError> {
     let mut result = Parsed::default();
     let mut section = Section::None;
@@ -141,6 +153,23 @@ fn parse_task_line(line: &str) -> Option<(&str, bool)> {
     None
 }
 
+/// Render a session as the GFM task-list format caleb stores on disk.
+///
+/// Round-trips with [`parse`]: serializing a parsed file reproduces it byte
+/// for byte.
+///
+/// ```
+/// # use caleb::markdown::{parse, serialize};
+/// # use caleb::model::{Task, Timestamp};
+/// let ts = Timestamp { year: 2026, month: 5, day: 31, hour: 14, minute: 30 };
+/// let active = vec![Task { text: "open".into(), done: false }];
+/// let out = serialize(Some(ts), &active, &[]);
+/// assert!(out.starts_with("# Session 2026-05-31 14:30\n"));
+/// assert!(out.contains("- [ ] open\n"));
+///
+/// let back = parse(&out).unwrap();
+/// assert_eq!(back.active[0].text, "open");
+/// ```
 pub fn serialize(timestamp: Option<Timestamp>, active: &[Task], completed: &[Task]) -> String {
     use std::fmt::Write;
     let mut out = String::new();
@@ -166,6 +195,7 @@ pub fn serialize(timestamp: Option<Timestamp>, active: &[Task], completed: &[Tas
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::task;
 
     #[test]
     fn count_tasks_counts_open_and_total() {
@@ -191,13 +221,6 @@ mod tests {
         let c = count_tasks(&src);
         assert_eq!(c.open, 1);
         assert_eq!(c.total, 2);
-    }
-
-    fn task(text: &str, done: bool) -> Task {
-        Task {
-            text: text.to_string(),
-            done,
-        }
     }
 
     #[test]
