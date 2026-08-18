@@ -27,7 +27,7 @@ pub enum RunError {
 
 /// What a screen coordinate resolves to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Hit {
+enum Hit {
     Task { pane: Pane, index: usize },
     Pane(Pane),
 }
@@ -39,21 +39,22 @@ pub enum Mode {
     Help,
 }
 
+#[derive(Debug)]
 pub struct App {
-    pub session: Session,
-    pub storage_dir: PathBuf,
-    pub palette: Palette,
-    pub focused: Pane,
-    pub active_cursor: usize,
-    pub completed_cursor: usize,
-    pub active_scroll: usize,
-    pub completed_scroll: usize,
-    pub mode: Mode,
-    pub input: String,
-    pub quit: bool,
+    session: Session,
+    storage_dir: PathBuf,
+    palette: Palette,
+    focused: Pane,
+    active_cursor: usize,
+    completed_cursor: usize,
+    active_scroll: usize,
+    completed_scroll: usize,
+    mode: Mode,
+    input: String,
+    quit: bool,
     /// Pane geometry from the last frame, for mouse hit-testing.
-    pub pane_rects: PaneRects,
-    pub last_click: ClickTracker<(Pane, usize)>,
+    pane_rects: PaneRects,
+    last_click: ClickTracker<(Pane, usize)>,
 }
 
 impl App {
@@ -75,7 +76,7 @@ impl App {
         }
     }
 
-    pub fn view_state(&self) -> ViewState<'_> {
+    fn view_state(&self) -> ViewState<'_> {
         ViewState {
             timestamp: self.session.timestamp,
             active: &self.session.active,
@@ -95,7 +96,7 @@ impl App {
         }
     }
 
-    pub fn handle_key(&mut self, key: KeyEvent) -> Result<(), SaveError> {
+    fn handle_key(&mut self, key: KeyEvent) -> Result<(), SaveError> {
         match self.mode {
             Mode::Help => {
                 // Any real key dismisses; it does not also act.
@@ -222,7 +223,7 @@ impl App {
         *self.cursor_mut() = target;
     }
 
-    pub fn clamp_cursors(&mut self) {
+    fn clamp_cursors(&mut self) {
         let a = self.session.active.len();
         self.active_cursor = if a == 0 {
             0
@@ -239,7 +240,7 @@ impl App {
 
     /// Keep both panes' scroll offsets consistent with their cursors.
     /// `pane_height` is the full pane height including borders.
-    pub fn adjust_scroll(&mut self, pane_height: u16) {
+    fn adjust_scroll(&mut self, pane_height: u16) {
         let visible = ui::visible_tasks(pane_height);
         clamp_pane(
             &mut self.active_scroll,
@@ -260,7 +261,7 @@ impl App {
     /// The 2-row stride makes the arithmetic fall out for free: integer
     /// division maps a spacer row and the content row beneath it to the same
     /// index, so clicking either selects the task they belong to.
-    pub fn hit_test(&self, col: u16, row: u16) -> Option<Hit> {
+    fn hit_test(&self, col: u16, row: u16) -> Option<Hit> {
         let (pane, rect) = if contains(self.pane_rects.active, col, row) {
             (Pane::Active, self.pane_rects.active)
         } else if contains(self.pane_rects.completed, col, row) {
@@ -292,7 +293,7 @@ impl App {
 
     /// Dispatch a mouse event. `now` is injected so double-click timing is
     /// testable without sleeping.
-    pub fn handle_mouse(&mut self, event: MouseEvent, now: Instant) {
+    fn handle_mouse(&mut self, event: MouseEvent, now: Instant) {
         // The add-task field owns the screen while it is open.
         if self.mode == Mode::AddInput {
             return;
@@ -355,7 +356,7 @@ impl App {
 
     /// Bound scroll offsets without dragging them back to the cursor — used
     /// after a wheel event, where the cursor deliberately stays put.
-    pub fn clamp_scroll_only(&mut self, pane_height: u16) {
+    fn clamp_scroll_only(&mut self, pane_height: u16) {
         let visible = ui::visible_tasks(pane_height);
         let max = |len: usize| {
             if visible == 0 || len <= visible {
@@ -375,7 +376,7 @@ impl App {
     /// Split out of [`App::run`] so the dispatch rules — press-only filtering,
     /// and which scroll clamp pairs with which event — are testable without a
     /// pty.
-    pub fn handle_event(
+    fn handle_event(
         &mut self,
         event: Event,
         now: Instant,

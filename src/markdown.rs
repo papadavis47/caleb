@@ -18,7 +18,7 @@ pub struct Parsed {
     pub completed: Vec<Task>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
     None,
     Active,

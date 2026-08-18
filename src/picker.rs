@@ -94,7 +94,7 @@ pub fn pretty_name(name: &str) -> String {
     name.to_string()
 }
 
-pub fn run(dir: &Path, tui: &mut Tui, palette: Palette) -> anyhow::Result<Choice> {
+pub fn run(dir: &Path, tui: &mut Tui, palette: Palette) -> std::io::Result<Choice> {
     let entries = scan(dir)?;
     let mut cursor = 0usize;
     let mut show_all = false;

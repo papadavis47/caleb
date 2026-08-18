@@ -15,8 +15,8 @@ use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, ListState, Padd
 use std::time::{Duration, Instant};
 
 /// Below this, draw only a "terminal too small" message.
-pub const MIN_ROWS: u16 = 10;
-pub const MIN_COLS: u16 = 30;
+const MIN_ROWS: u16 = 10;
+const MIN_COLS: u16 = 30;
 
 /// Rows each task occupies: one blank spacer plus one content row, so items
 /// read as visually separated.
@@ -310,7 +310,7 @@ fn draw_status_bar(frame: &mut Frame, _state: &ViewState, area: Rect) {
 
 /// Key reference shown by `?`. Each line is padded to 52 columns so the box
 /// has a straight right edge.
-pub const HELP_LINES: &[&str] = &[
+const HELP_LINES: &[&str] = &[
     " caleb — key reference                              ",
     "                                                    ",
     " Navigation                                         ",
