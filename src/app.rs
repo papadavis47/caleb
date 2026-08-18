@@ -11,8 +11,20 @@ use crate::ui::{self, ClickTracker, Overlay, Palette, PaneRects, ViewState};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use std::path::PathBuf;
 use std::time::Instant;
+use thiserror::Error;
 
-/// Two clicks on the same task within this window count as a double-click.
+/// Anything that can end the event loop early.
+///
+/// Draw and read failures are `io`; the exit-time autosave is its own variant
+/// so the message never blames the wrong subsystem.
+#[derive(Debug, Error)]
+pub enum RunError {
+    #[error("terminal I/O failed: {0}")]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Save(#[from] SaveError),
+}
+
 /// What a screen coordinate resolves to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hit {
@@ -340,44 +352,6 @@ impl App {
             *scroll -= 1;
         }
     }
-}
-
-impl App {
-    /// Draw, wait for an event, dispatch, repeat. Auto-saves on the way out.
-    pub fn run(&mut self, tui: &mut Tui) -> anyhow::Result<()> {
-        while !self.quit {
-            let mut rects = self.pane_rects;
-            tui.terminal().draw(|frame| {
-                rects = ui::draw(frame, &self.view_state());
-            })?;
-            self.pane_rects = rects;
-
-            // Pane geometry from the frame just drawn — the same rows the
-            // user is looking at when the next event arrives.
-            let pane_height = self.pane_rects.active.height;
-
-            match event::read()? {
-                Event::Key(key) if key.kind == event::KeyEventKind::Press => {
-                    // Press-only: terminals that also report releases would
-                    // otherwise run every binding twice.
-                    self.handle_key(key)?;
-                    self.adjust_scroll(pane_height);
-                }
-                Event::Mouse(m) => {
-                    self.handle_mouse(m, Instant::now());
-                    self.clamp_scroll_only(pane_height);
-                }
-                // Resize needs no work — the next draw reads the new size.
-                _ => {}
-            }
-        }
-
-        if self.session.dirty {
-            let dir = self.storage_dir.clone();
-            self.session.save(&dir)?;
-        }
-        Ok(())
-    }
 
     /// Bound scroll offsets without dragging them back to the cursor — used
     /// after a wheel event, where the cursor deliberately stays put.
@@ -392,6 +366,61 @@ impl App {
         };
         self.active_scroll = self.active_scroll.min(max(self.session.active.len()));
         self.completed_scroll = self.completed_scroll.min(max(self.session.completed.len()));
+    }
+
+    // --- event loop ---
+
+    /// Apply one input event against a frame of `pane_height` rows.
+    ///
+    /// Split out of [`App::run`] so the dispatch rules — press-only filtering,
+    /// and which scroll clamp pairs with which event — are testable without a
+    /// pty.
+    pub fn handle_event(
+        &mut self,
+        event: Event,
+        now: Instant,
+        pane_height: u16,
+    ) -> Result<(), SaveError> {
+        match event {
+            Event::Key(key) if key.kind == event::KeyEventKind::Press => {
+                // Press-only: terminals that also report releases would
+                // otherwise run every binding twice.
+                self.handle_key(key)?;
+                self.adjust_scroll(pane_height);
+            }
+            Event::Mouse(m) => {
+                self.handle_mouse(m, now);
+                // Wheel scrolling leaves the cursor alone, so the offset is
+                // bounded rather than dragged back to it.
+                self.clamp_scroll_only(pane_height);
+            }
+            // Resize needs no work — the next draw reads the new size.
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Draw, wait for an event, dispatch, repeat. Auto-saves on the way out.
+    pub fn run(&mut self, tui: &mut Tui) -> Result<(), RunError> {
+        while !self.quit {
+            let mut rects = self.pane_rects;
+            tui.terminal().draw(|frame| {
+                rects = ui::draw(frame, &self.view_state());
+            })?;
+            self.pane_rects = rects;
+
+            // Pane geometry from the frame just drawn — the same rows the
+            // user is looking at when the next event arrives.
+            let pane_height = self.pane_rects.active.height;
+
+            self.handle_event(event::read()?, Instant::now(), pane_height)?;
+        }
+
+        if self.session.dirty {
+            let dir = self.storage_dir.clone();
+            self.session.save(&dir)?;
+        }
+        Ok(())
     }
 }
 
@@ -709,6 +738,60 @@ mod tests {
             },
         };
         app
+    }
+
+    #[test]
+    fn handle_event_ignores_key_releases() {
+        // Terminals that report releases would otherwise run every binding
+        // twice — 'd' would delete two tasks per keypress.
+        let mut app = app_with(&["a", "b"]);
+        let mut release = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE);
+        release.kind = event::KeyEventKind::Release;
+
+        app.handle_event(Event::Key(release), Instant::now(), 8)
+            .unwrap();
+        assert_eq!(app.session.active.len(), 2, "release must not delete");
+
+        let mut down = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE);
+        down.kind = event::KeyEventKind::Press;
+        app.handle_event(Event::Key(down), Instant::now(), 8)
+            .unwrap();
+        assert_eq!(app.session.active.len(), 1, "press must delete");
+    }
+
+    #[test]
+    fn handle_event_ignores_resize() {
+        let mut app = app_with(&["a"]);
+        app.handle_event(Event::Resize(10, 10), Instant::now(), 8)
+            .unwrap();
+        assert_eq!(app.session.active.len(), 1);
+        assert!(!app.quit);
+    }
+
+    #[test]
+    fn handle_event_pairs_wheel_scroll_with_the_cursor_preserving_clamp() {
+        // A wheel event must bound the offset without dragging it back to the
+        // cursor; a key event does the opposite.
+        let tasks: Vec<String> = (0..10).map(|i| format!("task{i}")).collect();
+        let refs: Vec<&str> = tasks.iter().map(String::as_str).collect();
+        let mut app = app_with(&refs);
+        app.pane_rects = PaneRects {
+            active: ratatui::layout::Rect::new(0, 3, 20, 8),
+            completed: ratatui::layout::Rect::new(20, 3, 20, 8),
+        };
+
+        let wheel = click(MouseEventKind::ScrollDown, 5, 5);
+        app.handle_event(Event::Mouse(wheel), Instant::now(), 8)
+            .unwrap();
+        assert_eq!(app.active_scroll, 1);
+        assert_eq!(app.active_cursor, 0, "wheel leaves the cursor put");
+
+        // A key event re-syncs the offset to the cursor.
+        let mut key = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
+        key.kind = event::KeyEventKind::Press;
+        app.handle_event(Event::Key(key), Instant::now(), 8)
+            .unwrap();
+        assert_eq!(app.active_scroll, 0);
     }
 
     fn click(kind: MouseEventKind, col: u16, row: u16) -> MouseEvent {
