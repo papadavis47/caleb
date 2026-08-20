@@ -1,6 +1,6 @@
 # caleb
 
-Named for Caleb Smith in
+Named for the character Caleb Smith, played by Domhnall Gleeson, in
 [Ex Machina](<https://en.wikipedia.org/wiki/Ex_Machina_(film)>) — A film by
 Alex Garland.
 
@@ -72,12 +72,14 @@ Press `?` inside the app for the full reference.
 
 ## Active
 
-- [ ] buy milk
-- [ ] walk dog
+- [ ] refactor search component
+- [ ] implement structs for scaffold.rs
+- [ ] use delta to begin new project idea
+- [ ] write up new PR for some recent commits to fork
 
 ## Completed
 
-- [x] write the README
+- [x] write README
 ```
 
 GitHub-flavored task lists. Edit the file in any editor; caleb parses
