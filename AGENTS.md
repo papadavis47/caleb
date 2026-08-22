@@ -62,11 +62,12 @@ rename to now() → load → re-save.
 | `src/markdown.rs` | `parse` / `serialize` / `count_tasks`, `ParseError` |
 | `src/storage.rs` | XDG resolution, timestamps, file stems, collision suffixes |
 | `src/ui.rs` | palette, frame layout, panes, status bar, input bar, help overlay, `ClickTracker` |
-| `src/picker.rs` | `-r` screen: scan, filter, draw, selection loop |
+| `src/picker.rs` | `-r` screen: scan, filter, draw, delete, selection loop |
 | `src/test_util.rs` | `cfg(test)` fixtures shared across module test blocks |
 | `tests/roundtrip.rs` | persistence across module seams, public API only |
 | `tests/cli.rs` | binary behavior: `--list`, `--help`, non-TTY failures |
-| `scripts/smoke.py` | pty end-to-end test |
+| `scripts/smoke.py` | pty end-to-end test: the main session screen |
+| `scripts/smoke_picker.py` | pty end-to-end test: the `-r` picker, delete + filtering |
 
 Dependencies point one way: `model` has none, `markdown` and `storage` depend
 only on `model`, `session` composes them, and `ui`/`app`/`picker` sit at the
@@ -122,6 +123,7 @@ The binary refuses to run when stdin/stdout is not a tty. Use a pty —
 
 ```sh
 cargo build && python3 scripts/smoke.py
+cargo build && python3 scripts/smoke_picker.py
 ```
 
 Two things bite:

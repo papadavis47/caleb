@@ -52,6 +52,10 @@ named `YYYY-MM-DD_HH-MM.md`.
 Resuming a past session **renames** the file to the current timestamp —
 the old name goes away. Contents travel with the rename.
 
+The picker hides sessions with no unfinished tasks; press `a` to show all.
+Press `d` to delete the highlighted session — it asks `y/n` first, and the
+file is removed from disk for good. Nothing else in caleb ever deletes a file.
+
 ## Keys
 
 ```
@@ -61,6 +65,9 @@ App          s save   q quit (auto-saves)   ? help overlay   Esc cancel
 Mouse        wheel scrolls the focused pane
              click selects a task and focuses its pane
              double-click toggles a task
+
+Picker       j/k move   Enter open   d delete (y/n confirm)
+             a show all   Esc cancel
 ```
 
 Press `?` inside the app for the full reference.
