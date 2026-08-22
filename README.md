@@ -52,6 +52,11 @@ named `YYYY-MM-DD_HH-MM.md`.
 Resuming a past session **renames** the file to the current timestamp —
 the old name goes away. Contents travel with the rename.
 
+A preview pane beside the list shows the highlighted session's file as you
+move through it, so you can see what a session holds without opening it —
+which matters, since opening one renames it. It needs 80 columns; below that
+the list runs full width. `p` toggles it, `Ctrl-d`/`Ctrl-u` scroll it.
+
 The picker hides sessions with no unfinished tasks; press `a` to show all.
 Press `d` to delete the highlighted session — it asks `y/n` first, and the
 file is removed from disk for good. Nothing else in caleb ever deletes a file.
@@ -67,6 +72,7 @@ Mouse        wheel scrolls the focused pane
              double-click toggles a task
 
 Picker       j/k move   Enter open   d delete (y/n confirm)
+             p preview   Ctrl-d/Ctrl-u scroll preview
              a show all   Esc cancel
 ```
 

@@ -4,12 +4,14 @@ use crate::markdown::count_tasks;
 use crate::storage::FILE_EXTENSION;
 use crate::tui::Tui;
 use crate::ui::{ClickTracker, Palette};
-use crossterm::event::{self, Event, KeyCode, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{
+    self, Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{List, ListItem, ListState};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use std::path::Path;
 use std::time::Instant;
 
@@ -21,6 +23,25 @@ pub struct Entry {
     pub name: String,
     pub open: u32,
     pub total: u32,
+    /// The file as read, kept for the preview pane. `scan` reads every file
+    /// to count its tasks, so holding on to the text costs no extra I/O.
+    pub contents: String,
+}
+
+/// Everything the picker's renderer needs. Grouped rather than passed loose
+/// so `draw` keeps one parameter as the screen grows, the way `ui::ViewState`
+/// already does for the session screen.
+#[derive(Debug, Clone, Copy)]
+pub struct PickerView<'a> {
+    pub visible: &'a [&'a Entry],
+    pub cursor: usize,
+    pub show_all: bool,
+    pub pending: Option<usize>,
+    /// Sessions the filter is holding back, for the empty state.
+    pub hidden: usize,
+    pub preview_on: bool,
+    pub preview_scroll: usize,
+    pub palette: Palette,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +72,7 @@ pub fn scan(dir: &Path) -> std::io::Result<Vec<Entry>> {
             name,
             open: counts.open,
             total: counts.total,
+            contents,
         });
     }
     out.sort_by(|a, b| b.name.cmp(&a.name));
@@ -64,6 +86,71 @@ pub fn scan(dir: &Path) -> std::io::Result<Vec<Entry>> {
 /// the entries outlive the filtered view.
 pub fn filter_visible(entries: &[Entry], show_all: bool) -> Vec<&Entry> {
     entries.iter().filter(|e| show_all || e.open > 0).collect()
+}
+
+/// Columns the list keeps for itself when the preview sits beside it. The
+/// widest a row can render — a collision suffix and three-digit counts —
+/// is 43, so rows never truncate.
+const LIST_WIDTH: u16 = 44;
+
+/// Below this the preview is dropped entirely and the list runs full width,
+/// rather than squeezing both into a column that suits neither.
+const MIN_WIDTH_FOR_PREVIEW: u16 = 80;
+
+/// Style one raw line of a session file. Only the three shapes caleb writes
+/// are recognised; everything else — including notes hand-added to a file,
+/// which `markdown::parse` discards — is dimmed but still shown verbatim.
+fn preview_line(raw: &str, palette: Palette) -> Style {
+    if raw.starts_with("# ") {
+        Style::default()
+            .fg(palette.accent)
+            .add_modifier(Modifier::BOLD)
+    } else if raw.starts_with("## ") {
+        Style::default()
+            .fg(palette.help)
+            .add_modifier(Modifier::BOLD)
+    } else if raw.starts_with("- [x] ") || raw.starts_with("- [X] ") {
+        Style::default()
+            .fg(palette.muted)
+            .add_modifier(Modifier::DIM | Modifier::CROSSED_OUT)
+    } else if raw.starts_with("- [ ] ") {
+        Style::default()
+    } else {
+        Style::default()
+            .fg(palette.muted)
+            .add_modifier(Modifier::DIM)
+    }
+}
+
+/// Rows `contents` occupies once wrapped into `width` columns.
+///
+/// A character-count ceiling, not a word-wrap simulation: ratatui breaks on
+/// word boundaries, so this can undercount a line by a row. It exists only to
+/// stop scrolling somewhere near the end rather than into empty space, and it
+/// is exact for the common case of lines that fit.
+pub fn wrapped_lines(contents: &str, width: u16) -> usize {
+    if width == 0 {
+        return contents.lines().count();
+    }
+    let width = width as usize;
+    contents
+        .lines()
+        .map(|l| l.chars().count().div_ceil(width).max(1))
+        .sum()
+}
+
+pub fn preview_fits(width: u16) -> bool {
+    width >= MIN_WIDTH_FOR_PREVIEW
+}
+
+/// Furthest useful scroll offset: the one that puts the last line on the
+/// bottom row. Content that fits never scrolls.
+///
+/// Rust note: `saturating_sub` matters on both halves — `lines - height`
+/// wraps around on unsigned math when the pane is taller than the content,
+/// which would send the view far past the end instead of to the top.
+pub fn clamp_scroll(scroll: usize, lines: usize, height: usize) -> usize {
+    scroll.min(lines.saturating_sub(height))
 }
 
 /// Whether to reveal finished sessions when the picker opens, so a store that
@@ -134,6 +221,8 @@ pub fn run(dir: &Path, tui: &mut Tui, palette: Palette) -> std::io::Result<Choic
     let mut cursor = 0usize;
     let mut show_all = show_all_on_open(&entries);
     let mut pending: Option<usize> = None;
+    let mut preview_on = true;
+    let mut preview_scroll = 0usize;
     let mut last_click = ClickTracker::default();
 
     loop {
@@ -150,14 +239,28 @@ pub fn run(dir: &Path, tui: &mut Tui, palette: Palette) -> std::io::Result<Choic
         tui.terminal().draw(|frame| {
             draw(
                 frame,
-                &visible,
-                cursor,
-                show_all,
-                pending,
-                entries.len() - visible.len(),
-                palette,
+                &PickerView {
+                    visible: &visible,
+                    cursor,
+                    show_all,
+                    pending,
+                    hidden: entries.len() - visible.len(),
+                    preview_on,
+                    preview_scroll,
+                    palette,
+                },
             );
         })?;
+
+        // Preview geometry from the same frame the user is looking at, so a
+        // resize between keypresses cannot scroll against a stale height.
+        let size = tui.terminal().size()?;
+        let page = size.height.saturating_sub(3) as usize;
+        let preview_width = size.width.saturating_sub(LIST_WIDTH + 1);
+        let preview_height = visible
+            .get(cursor)
+            .map_or(0, |e| wrapped_lines(&e.contents, preview_width));
+        let before = cursor;
 
         // The name is cloned out of `visible` so the borrow of `entries` ends
         // with this iteration and the re-scan below can reassign it.
@@ -182,11 +285,19 @@ pub fn run(dir: &Path, tui: &mut Tui, palette: Palette) -> std::io::Result<Choic
                             show_all = !show_all;
                             cursor = 0;
                         }
+                        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            preview_scroll =
+                                clamp_scroll(preview_scroll + page / 2, preview_height, page);
+                        }
+                        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            preview_scroll = preview_scroll.saturating_sub(page / 2);
+                        }
                         KeyCode::Char('d') => {
                             if cursor < visible.len() {
                                 pending = Some(cursor);
                             }
                         }
+                        KeyCode::Char('p') => preview_on = !preview_on,
                         KeyCode::Enter => {
                             if let Some(e) = visible.get(cursor) {
                                 return Ok(Choice::Selected(e.name.clone()));
@@ -208,12 +319,19 @@ pub fn run(dir: &Path, tui: &mut Tui, palette: Palette) -> std::io::Result<Choic
             _ => {}
         }
 
+        // Moving to another session shows another document; keeping the old
+        // offset would drop the user into the middle of it.
+        if cursor != before {
+            preview_scroll = 0;
+        }
+
         if let Some(name) = confirmed {
             // The cursor is deliberately left where it is: the next session
             // slides up under it. A failed delete is swallowed because the
             // re-scan reports the truth either way.
             let _ = delete_entry(dir, &name);
             entries = scan(dir)?;
+            preview_scroll = 0;
         }
     }
 }
@@ -240,15 +358,49 @@ fn handle_mouse(
     is_double.then(|| Choice::Selected(entry.name.clone()))
 }
 
-fn draw(
+/// The right-hand pane: one session file, styled and scrolled.
+///
+/// Takes the entry rather than the whole view so it stays callable with
+/// nothing selected, which is what an empty list renders.
+fn draw_preview(
     frame: &mut Frame,
-    visible: &[&Entry],
-    cursor: usize,
-    show_all: bool,
-    pending: Option<usize>,
-    hidden: usize,
+    area: Rect,
+    entry: Option<&Entry>,
+    scroll: usize,
     palette: Palette,
 ) {
+    let lines: Vec<Line> = entry
+        .map(|e| {
+            e.contents
+                .lines()
+                .map(|raw| Line::from(raw).style(preview_line(raw, palette)))
+                .collect()
+        })
+        .unwrap_or_default();
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .borders(Borders::LEFT)
+                    .border_style(Style::default().fg(palette.muted)),
+            )
+            .wrap(Wrap { trim: false })
+            .scroll((scroll.min(u16::MAX as usize) as u16, 0)),
+        area,
+    );
+}
+
+fn draw(frame: &mut Frame, view: &PickerView) {
+    let PickerView {
+        visible,
+        cursor,
+        show_all,
+        pending,
+        hidden,
+        preview_on,
+        preview_scroll,
+        palette,
+    } = *view;
     let area = frame.area();
     let [header, body, status] = Layout::vertical([
         Constraint::Length(2),
@@ -268,6 +420,26 @@ fn draw(
             ..header
         },
     );
+
+    // The list keeps a fixed width so its rows never truncate; the preview
+    // takes whatever is left, which is where extra width is worth more.
+    let (body, preview) = if preview_on && preview_fits(area.width) {
+        let [list, preview] =
+            Layout::horizontal([Constraint::Length(LIST_WIDTH), Constraint::Min(0)]).areas(body);
+        (list, Some(preview))
+    } else {
+        (body, None)
+    };
+
+    if let Some(area) = preview {
+        draw_preview(
+            frame,
+            area,
+            visible.get(cursor).copied(),
+            preview_scroll,
+            palette,
+        );
+    }
 
     if visible.is_empty() {
         let message = if hidden > 0 {
@@ -302,11 +474,19 @@ fn draw(
     }
 
     let _ = palette; // picker chrome is monochrome
-    let status_line = match pending.and_then(|i| visible.get(i)) {
-        Some(e) => Line::from(format!(" delete {}?   y/n", pretty_name(&e.name)))
-            .style(Style::default().add_modifier(Modifier::BOLD)),
-        None => Line::from(" j/k move   Enter open   d delete   a show all   Esc cancel")
-            .style(Style::default().add_modifier(Modifier::DIM)),
+    let status_line = if let Some(e) = pending.and_then(|i| visible.get(i)) {
+        Line::from(format!(" delete {}?   y/n", pretty_name(&e.name)))
+            .style(Style::default().add_modifier(Modifier::BOLD))
+    } else {
+        {
+            // No point advertising a key that does nothing at this width.
+            let hint = if preview_fits(area.width) {
+                " j/k move   Enter open   d delete   p preview   a show all   Esc cancel"
+            } else {
+                " j/k move   Enter open   d delete   a show all   Esc cancel"
+            };
+            Line::from(hint).style(Style::default().add_modifier(Modifier::DIM))
+        }
     };
     frame.render_widget(status_line, status);
 }
@@ -318,10 +498,15 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     fn entry(name: &str, open: u32, total: u32) -> Entry {
+        entry_with(name, open, total, "")
+    }
+
+    fn entry_with(name: &str, open: u32, total: u32, contents: &str) -> Entry {
         Entry {
             name: name.to_string(),
             open,
             total,
+            contents: contents.to_string(),
         }
     }
 
@@ -397,29 +582,36 @@ mod tests {
         assert_eq!(pretty_name(name), name);
     }
 
-    fn render(
-        width: u16,
-        height: u16,
-        visible: &[&Entry],
-        cursor: usize,
-        pending: Option<usize>,
-        hidden: usize,
-    ) -> ratatui::buffer::Buffer {
+    fn view<'a>(visible: &'a [&'a Entry]) -> PickerView<'a> {
+        PickerView {
+            visible,
+            cursor: 0,
+            show_all: false,
+            pending: None,
+            hidden: 0,
+            preview_on: true,
+            preview_scroll: 0,
+            palette: Palette::new(true),
+        }
+    }
+
+    fn render(width: u16, height: u16, view: &PickerView) -> ratatui::buffer::Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
             .draw(|f| {
-                draw(
-                    f,
-                    visible,
-                    cursor,
-                    false,
-                    pending,
-                    hidden,
-                    Palette::new(false),
-                );
+                draw(f, view);
             })
             .unwrap();
         terminal.backend().buffer().clone()
+    }
+
+    /// The whole screen as text, for assertions that do not care where a
+    /// string landed.
+    fn screen(buf: &ratatui::buffer::Buffer) -> String {
+        (0..buf.area.height)
+            .map(|y| row(buf, y))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     fn row(buf: &ratatui::buffer::Buffer, y: u16) -> String {
@@ -482,7 +674,7 @@ mod tests {
     fn the_hint_line_advertises_the_delete_key() {
         let e = entry("2026-05-31_14-30.md", 1, 2);
         let visible = vec![&e];
-        let buf = render(70, 6, &visible, 0, None, 0);
+        let buf = render(70, 6, &view(&visible));
         assert!(
             row(&buf, 5).contains("d delete"),
             "status row was: {:?}",
@@ -494,7 +686,14 @@ mod tests {
     fn a_pending_delete_replaces_the_hint_line_with_a_confirm_prompt() {
         let e = entry("2026-05-31_14-30.md", 1, 2);
         let visible = vec![&e];
-        let buf = render(70, 6, &visible, 0, Some(0), 0);
+        let buf = render(
+            70,
+            6,
+            &PickerView {
+                pending: Some(0),
+                ..view(&visible)
+            },
+        );
         let status = row(&buf, 5);
         assert!(status.contains("delete"), "status row was: {status:?}");
         assert!(
@@ -527,7 +726,14 @@ mod tests {
     fn an_emptied_list_names_the_finished_sessions_still_on_disk() {
         // Deleting the last unfinished session must not silently reveal the
         // finished ones; it says how many are there and how to see them.
-        let buf = render(70, 6, &[], 0, None, 4);
+        let buf = render(
+            70,
+            6,
+            &PickerView {
+                hidden: 4,
+                ..view(&[])
+            },
+        );
         let body = row(&buf, 2);
         assert!(
             body.contains("no unfinished sessions"),
@@ -542,7 +748,252 @@ mod tests {
 
     #[test]
     fn a_genuinely_empty_store_still_says_no_sessions_found() {
-        let buf = render(70, 6, &[], 0, None, 0);
+        let buf = render(70, 6, &view(&[]));
         assert!(row(&buf, 2).contains("no sessions found"));
+    }
+
+    #[test]
+    fn the_preview_fits_at_eighty_columns() {
+        assert!(preview_fits(80));
+    }
+
+    #[test]
+    fn the_preview_is_dropped_below_eighty_columns() {
+        assert!(!preview_fits(79));
+        assert!(!preview_fits(0));
+    }
+
+    #[test]
+    fn scrolling_stops_with_the_last_line_on_screen() {
+        // 30 lines in a 10-row pane: the furthest useful offset is 20.
+        assert_eq!(clamp_scroll(25, 30, 10), 20);
+        assert_eq!(clamp_scroll(5, 30, 10), 5);
+    }
+
+    #[test]
+    fn content_shorter_than_the_pane_never_scrolls() {
+        assert_eq!(clamp_scroll(7, 4, 10), 0);
+    }
+
+    #[test]
+    fn a_pane_taller_than_its_content_does_not_underflow() {
+        // `lines - height` wraps around on unsigned math, which would send
+        // the view billions of rows past the end instead of to the top.
+        assert_eq!(clamp_scroll(3, 4, 10), 0);
+        assert_eq!(clamp_scroll(usize::MAX, 1, 400), 0);
+    }
+
+    #[test]
+    fn clamping_never_raises_the_requested_offset() {
+        assert_eq!(clamp_scroll(0, 500, 10), 0);
+        assert_eq!(clamp_scroll(3, 500, 0), 3);
+    }
+
+    #[test]
+    fn scan_keeps_the_file_contents_for_the_preview() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("2026-05-31_14-30.md"),
+            "# Session 2026-05-31 14:30\n\n## Active\n\n- [ ] the only task\n",
+        )
+        .unwrap();
+        let entries = scan(dir.path()).unwrap();
+        assert!(
+            entries[0].contents.contains("- [ ] the only task"),
+            "scan already reads the file; it must keep what it read"
+        );
+    }
+
+    const SAMPLE: &str = "# Session 2026-05-31 14:30\n\n## Active\n\n- [ ] wire up the parser\n\n## Completed\n\n- [x] read the chapter\n";
+
+    fn find(buf: &ratatui::buffer::Buffer, needle: &str) -> (u16, u16) {
+        for y in 0..buf.area.height {
+            if let Some(x) = row(buf, y).find(needle) {
+                return (x as u16, y);
+            }
+        }
+        panic!("{needle:?} is not on screen:\n{}", screen(buf));
+    }
+
+    #[test]
+    fn the_preview_shows_the_highlighted_sessions_contents() {
+        let e = entry_with("2026-05-31_14-30.md", 1, 2, SAMPLE);
+        let visible = vec![&e];
+        let buf = render(100, 12, &view(&visible));
+        let text = screen(&buf);
+        assert!(
+            text.contains("wire up the parser"),
+            "preview missing:\n{text}"
+        );
+        assert!(
+            text.contains("read the chapter"),
+            "preview missing:\n{text}"
+        );
+    }
+
+    #[test]
+    fn the_preview_is_dropped_on_a_narrow_terminal() {
+        let e = entry_with("2026-05-31_14-30.md", 1, 2, SAMPLE);
+        let visible = vec![&e];
+        let buf = render(79, 12, &view(&visible));
+        let text = screen(&buf);
+        assert!(
+            !text.contains("wire up the parser"),
+            "narrow terminals get no preview:\n{text}"
+        );
+        assert!(
+            text.contains("2026-05-31  14:30"),
+            "the list must remain:\n{text}"
+        );
+    }
+
+    #[test]
+    fn the_preview_can_be_toggled_off_on_a_wide_terminal() {
+        let e = entry_with("2026-05-31_14-30.md", 1, 2, SAMPLE);
+        let visible = vec![&e];
+        let buf = render(
+            100,
+            12,
+            &PickerView {
+                preview_on: false,
+                ..view(&visible)
+            },
+        );
+        assert!(!screen(&buf).contains("wire up the parser"));
+    }
+
+    #[test]
+    fn the_preview_follows_the_cursor() {
+        let a = entry_with("2026-05-31_14-30.md", 1, 1, "- [ ] the newer one\n");
+        let b = entry_with("2026-05-30_10-00.md", 1, 1, "- [ ] the older one\n");
+        let visible = vec![&a, &b];
+        let buf = render(
+            100,
+            12,
+            &PickerView {
+                cursor: 1,
+                ..view(&visible)
+            },
+        );
+        let text = screen(&buf);
+        assert!(
+            text.contains("the older one"),
+            "preview should track row 1:\n{text}"
+        );
+        assert!(
+            !text.contains("the newer one"),
+            "row 0 should not show:\n{text}"
+        );
+    }
+
+    #[test]
+    fn the_preview_scrolls_past_earlier_lines() {
+        let mut long = String::new();
+        for i in 0..40 {
+            use std::fmt::Write;
+            writeln!(long, "- [ ] task number {i}").unwrap();
+        }
+        let e = entry_with("2026-05-31_14-30.md", 40, 40, &long);
+        let visible = vec![&e];
+        let buf = render(
+            100,
+            12,
+            &PickerView {
+                preview_scroll: 20,
+                ..view(&visible)
+            },
+        );
+        let text = screen(&buf);
+        assert!(
+            text.contains("task number 20"),
+            "should be scrolled to 20:\n{text}"
+        );
+        assert!(
+            !text.contains("task number 0\n"),
+            "line 0 should be above the fold"
+        );
+    }
+
+    #[test]
+    fn the_session_heading_is_bold_in_the_preview() {
+        let e = entry_with("2026-05-31_14-30.md", 1, 2, SAMPLE);
+        let visible = vec![&e];
+        let buf = render(100, 12, &view(&visible));
+        let (x, y) = find(&buf, "# Session");
+        assert!(buf[(x, y)].modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn completed_tasks_are_struck_through_in_the_preview() {
+        // Matches how the session screen renders a done task.
+        let e = entry_with("2026-05-31_14-30.md", 1, 2, SAMPLE);
+        let visible = vec![&e];
+        let buf = render(100, 12, &view(&visible));
+        let (x, y) = find(&buf, "- [x] read the chapter");
+        assert!(buf[(x, y)].modifier.contains(Modifier::CROSSED_OUT));
+    }
+
+    #[test]
+    fn open_tasks_are_not_struck_through_in_the_preview() {
+        let e = entry_with("2026-05-31_14-30.md", 1, 2, SAMPLE);
+        let visible = vec![&e];
+        let buf = render(100, 12, &view(&visible));
+        let (x, y) = find(&buf, "- [ ] wire up the parser");
+        assert!(!buf[(x, y)].modifier.contains(Modifier::CROSSED_OUT));
+    }
+
+    #[test]
+    fn the_hint_line_advertises_the_preview_toggle() {
+        let e = entry_with("2026-05-31_14-30.md", 1, 2, SAMPLE);
+        let visible = vec![&e];
+        let buf = render(100, 12, &view(&visible));
+        assert!(
+            row(&buf, 11).contains("p preview"),
+            "status: {:?}",
+            row(&buf, 11)
+        );
+    }
+
+    #[test]
+    fn preview_headings_take_their_palette_colors() {
+        // The picker chrome is monochrome, but the preview is content and
+        // earns the same palette the session screen uses.
+        let e = entry_with("2026-05-31_14-30.md", 1, 2, SAMPLE);
+        let visible = vec![&e];
+        let buf = render(100, 12, &view(&visible));
+        let palette = Palette::new(true);
+
+        let (x, y) = find(&buf, "# Session");
+        assert_eq!(buf[(x, y)].fg, palette.accent, "session heading");
+
+        let (x, y) = find(&buf, "## Active");
+        assert_eq!(buf[(x, y)].fg, palette.help, "pane heading");
+    }
+
+    #[test]
+    fn lines_that_fit_are_counted_once_each() {
+        assert_eq!(wrapped_lines("one\ntwo\nthree\n", 40), 3);
+    }
+
+    #[test]
+    fn a_blank_line_still_occupies_a_row() {
+        assert_eq!(wrapped_lines("a\n\nb\n", 40), 3);
+    }
+
+    #[test]
+    fn an_overlong_line_occupies_the_rows_it_wraps_onto() {
+        // 150 bytes is the task cap; at 30 columns that is five rows.
+        let long = format!("- [ ] {}", "x".repeat(144));
+        assert_eq!(wrapped_lines(&long, 30), 5);
+    }
+
+    #[test]
+    fn empty_contents_have_no_height() {
+        assert_eq!(wrapped_lines("", 40), 0);
+    }
+
+    #[test]
+    fn a_zero_width_pane_does_not_divide_by_zero() {
+        assert_eq!(wrapped_lines("abc\n", 0), 1);
     }
 }
