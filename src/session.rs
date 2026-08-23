@@ -74,6 +74,30 @@ pub enum ResumeError {
     },
 }
 
+/// Failure to pull tasks out of a past session. `SaveSource` is the one that
+/// reports partial success: the tasks are already in the current session and
+/// on disk by then, so it warns rather than pretending nothing happened.
+#[derive(Debug, Error)]
+pub enum PullError {
+    #[error("cannot load session '{name}': {source}")]
+    LoadSource {
+        name: String,
+        #[source]
+        source: LoadError,
+    },
+    #[error("cannot save the current session: {source}")]
+    SaveTarget {
+        #[source]
+        source: SaveError,
+    },
+    #[error("tasks were pulled, but '{name}' still shows them as open: {source}")]
+    SaveSource {
+        name: String,
+        #[source]
+        source: SaveError,
+    },
+}
+
 /// Build an empty session with a unique filename in `dir`. Nothing is
 /// written until the first `save`.
 pub fn create_new(dir: &Path, ts: Timestamp) -> std::io::Result<Session> {
@@ -174,6 +198,42 @@ pub fn pull_tasks(source: &mut Session, target: &mut Session, indices: &[usize])
         target.dirty = true;
     }
     moved
+}
+
+/// Load `source_name`, move the tasks at `indices` into `target`, and write
+/// both files.
+///
+/// The write order is the whole point. The target is saved *first*, so a
+/// failure between the two writes leaves the tasks open in both files —
+/// visible, and fixable by hand. Saving the source first and then failing
+/// would check them off in one file without ever recording them in the other,
+/// which loses them outright. For the same reason a `SaveSource` failure is
+/// reported rather than rolled back: undoing it can only lose more.
+pub fn pull_from_file(
+    dir: &Path,
+    source_name: &str,
+    target: &mut Session,
+    indices: &[usize],
+) -> Result<usize, PullError> {
+    let mut loaded = Session::load(dir, source_name).map_err(|e| PullError::LoadSource {
+        name: source_name.to_string(),
+        source: e,
+    })?;
+
+    let moved = pull_tasks(&mut loaded, target, indices);
+    if moved == 0 {
+        return Ok(0);
+    }
+
+    target
+        .save(dir)
+        .map_err(|e| PullError::SaveTarget { source: e })?;
+    loaded.save(dir).map_err(|e| PullError::SaveSource {
+        name: source_name.to_string(),
+        source: e,
+    })?;
+
+    Ok(moved)
 }
 
 impl Session {
@@ -584,5 +644,104 @@ mod tests {
         assert_eq!(target.active[0].text, "open one");
         assert_eq!(source.active.len(), 1, "the done one stays put");
         assert_eq!(source.active[0].text, "secretly done");
+    }
+
+    #[test]
+    fn pull_from_file_updates_both_files_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut old = create_new(dir.path(), ts_at(14, 30)).unwrap();
+        old.add(Pane::Active, "carry me");
+        old.add(Pane::Active, "leave me");
+        old.save(dir.path()).unwrap();
+
+        let mut current = create_new(dir.path(), ts_at(16, 45)).unwrap();
+        let moved = pull_from_file(dir.path(), &old.filename, &mut current, &[0]).unwrap();
+        assert_eq!(moved, 1);
+
+        let source = Session::load(dir.path(), &old.filename).unwrap();
+        assert_eq!(source.active.len(), 1);
+        assert_eq!(source.active[0].text, "leave me");
+        assert_eq!(source.completed[0].text, "carry me");
+        assert!(source.completed[0].done);
+
+        let target = Session::load(dir.path(), &current.filename).unwrap();
+        assert_eq!(target.active[0].text, "carry me");
+        assert!(!target.active[0].done);
+        assert!(
+            !current.dirty,
+            "both files were written, nothing is pending"
+        );
+    }
+
+    #[test]
+    fn a_fully_drained_source_reaches_zero_open() {
+        // This is what makes `--clean` able to sweep it afterwards.
+        let dir = tempfile::tempdir().unwrap();
+        let mut old = create_new(dir.path(), ts_at(14, 30)).unwrap();
+        old.add(Pane::Active, "one");
+        old.add(Pane::Active, "two");
+        old.save(dir.path()).unwrap();
+
+        let mut current = create_new(dir.path(), ts_at(16, 45)).unwrap();
+        pull_from_file(dir.path(), &old.filename, &mut current, &[0, 1]).unwrap();
+
+        let on_disk = std::fs::read_to_string(dir.path().join(&old.filename)).unwrap();
+        assert_eq!(crate::markdown::count_tasks(&on_disk).open, 0, "{on_disk}");
+    }
+
+    #[test]
+    fn pull_from_file_creates_a_target_that_was_never_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut old = create_new(dir.path(), ts_at(14, 30)).unwrap();
+        old.add(Pane::Active, "carry me");
+        old.save(dir.path()).unwrap();
+
+        let mut current = create_new(dir.path(), ts_at(16, 45)).unwrap();
+        assert!(!dir.path().join(&current.filename).exists());
+
+        pull_from_file(dir.path(), &old.filename, &mut current, &[0]).unwrap();
+        assert!(dir.path().join(&current.filename).exists());
+    }
+
+    #[test]
+    fn pull_from_file_names_a_missing_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut current = create_new(dir.path(), ts_at(16, 45)).unwrap();
+
+        let err = pull_from_file(dir.path(), "vanished.md", &mut current, &[0]).unwrap_err();
+        assert!(matches!(err, PullError::LoadSource { .. }));
+        assert!(err.to_string().contains("vanished.md"));
+    }
+
+    #[test]
+    fn pull_from_file_propagates_an_unparseable_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad = format!("- [ ] {}\n", "x".repeat(MAX_TASK_BYTES + 1));
+        std::fs::write(dir.path().join("bad.md"), bad).unwrap();
+        let mut current = create_new(dir.path(), ts_at(16, 45)).unwrap();
+
+        assert!(matches!(
+            pull_from_file(dir.path(), "bad.md", &mut current, &[0]),
+            Err(PullError::LoadSource { .. })
+        ));
+    }
+
+    #[test]
+    fn pulling_nothing_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut old = create_new(dir.path(), ts_at(14, 30)).unwrap();
+        old.add(Pane::Active, "stays");
+        old.save(dir.path()).unwrap();
+
+        let mut current = create_new(dir.path(), ts_at(16, 45)).unwrap();
+        assert_eq!(
+            pull_from_file(dir.path(), &old.filename, &mut current, &[]).unwrap(),
+            0
+        );
+        assert!(
+            !dir.path().join(&current.filename).exists(),
+            "an empty pull must not create the target file"
+        );
     }
 }
