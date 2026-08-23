@@ -70,6 +70,7 @@ rename to now() → load → re-save.
 | `tests/cli.rs` | binary behavior: `--list`, `--clean`, `--help`, non-TTY failures |
 | `scripts/smoke.py` | pty end-to-end test: the main session screen |
 | `scripts/smoke_picker.py` | pty end-to-end test: the `-r` picker, delete + filtering + preview |
+| `scripts/smoke_pull.py` | pty end-to-end test: the `p` pull flow, both stages |
 
 Dependencies point one way: `model` has none, `markdown` and `storage` depend
 only on `model`, `session` composes them, and `ui`/`app`/`picker` sit at the
@@ -132,6 +133,7 @@ The binary refuses to run when stdin/stdout is not a tty. Use a pty —
 ```sh
 cargo build && python3 scripts/smoke.py
 cargo build && python3 scripts/smoke_picker.py
+cargo build && python3 scripts/smoke_pull.py
 ```
 
 Two things bite:

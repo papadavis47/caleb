@@ -135,3 +135,37 @@ fn colliding_timestamps_get_distinct_files() {
         "second session"
     );
 }
+
+#[test]
+fn pulled_tasks_cross_the_file_boundary_and_are_not_offered_twice() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let mut old = session::create_new(dir.path(), ts(14, 30)).unwrap();
+    old.add(Pane::Active, "carry me");
+    old.add(Pane::Active, "and me");
+    old.add(Pane::Active, "not me");
+    old.save(dir.path()).unwrap();
+
+    let mut current = session::create_new(dir.path(), ts(16, 45)).unwrap();
+    let moved = session::pull_from_file(dir.path(), &old.filename, &mut current, &[0, 1]).unwrap();
+    assert_eq!(moved, 2);
+
+    // Both files, re-read from disk through the public API.
+    let source = Session::load(dir.path(), &old.filename).unwrap();
+    assert_eq!(source.active.len(), 1);
+    assert_eq!(source.active[0].text, "not me");
+    let done: Vec<&str> = source.completed.iter().map(|t| t.text.as_str()).collect();
+    assert_eq!(done, ["carry me", "and me"]);
+
+    let target = Session::load(dir.path(), &current.filename).unwrap();
+    let carried: Vec<&str> = target.active.iter().map(|t| t.text.as_str()).collect();
+    assert_eq!(carried, ["carry me", "and me"]);
+    assert!(target.active.iter().all(|t| !t.done));
+
+    // A second trip through the picker offers only what stayed behind.
+    let entries = caleb::picker::scan(dir.path()).unwrap();
+    let offered = caleb::pull::candidates(&entries, &current.filename);
+    assert_eq!(offered.len(), 1);
+    assert_eq!(offered[0].name, old.filename);
+    assert_eq!(offered[0].open, vec![(0, "not me".to_string())]);
+}
