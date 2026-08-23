@@ -58,12 +58,13 @@ rename to now() → load → re-save.
 | `src/model.rs` | `Task`, `Timestamp` (+ `Display`), `Pane`, `MAX_TASK_BYTES`; no deps |
 | `src/tui.rs` | crossterm raw mode / alt screen / mouse capture, RAII guard, panic hook |
 | `src/app.rs` | event loop, view state, key + mouse dispatch, scroll clamping |
-| `src/session.rs` | `Session`; create / load / save / resume; mutations |
+| `src/session.rs` | `Session`; create / load / save / resume; mutations; pull_tasks / pull_from_file |
 | `src/markdown.rs` | `parse` / `serialize` / `count_tasks`, `ParseError` |
 | `src/storage.rs` | XDG resolution, timestamps, file stems, collision suffixes |
 | `src/clean.rs` | `--clean` rule: which scanned entries are cleanable, and removing them |
 | `src/ui.rs` | palette, frame layout, panes, status bar, input bar, help overlay, `ClickTracker` |
 | `src/picker.rs` | `-r` screen: scan, filter, preview pane, delete, selection loop |
+| `src/pull.rs` | `p` screens: session then task selection, pure `on_key` state machine |
 | `src/test_util.rs` | `cfg(test)` fixtures shared across module test blocks |
 | `tests/roundtrip.rs` | persistence across module seams, public API only |
 | `tests/cli.rs` | binary behavior: `--list`, `--clean`, `--help`, non-TTY failures |
@@ -190,6 +191,14 @@ unfinished task; `a` toggles show-all. An empty filtered list flips to
 show-all automatically rather than presenting an empty box. `Enter` or
 double-click opens the selection; `Esc` or `q` exits the program — it does
 **not** fall through to creating a new session.
+
+`p` pulls open tasks out of a past session: they land open in the current
+session and completed in the source. `session::pull_from_file` saves the
+**target before the source** on purpose — a failure between the two writes
+leaves the tasks open in both files, which is visible and fixable, whereas the
+other order loses them. `pull::candidates` counts open tasks with
+`markdown::parse`, not `count_tasks`: a pull moves tasks out of `active`, and
+`count_tasks` would also count a `- [ ]` hand-filed under `## Completed`.
 
 ## Verified API facts
 

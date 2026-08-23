@@ -324,6 +324,8 @@ const HELP_LINES: &[&str] = &[
     "   d            delete selected task                ",
     "   space / x    toggle done (moves task)            ",
     "   Shift+J / K  move task down / up                 ",
+    "   p            pull tasks from a past session      ",
+    "                (saves the current session)         ",
     "                                                    ",
     " Mouse                                              ",
     "   click        select task / focus pane            ",
@@ -708,6 +710,29 @@ mod tests {
             assert!(
                 !content.contains('\u{fffd}'),
                 "tail={tail}: truncation split a character, got {content:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_help_overlay_documents_the_pull_key() {
+        let text = HELP_LINES.join("\n");
+        assert!(text.contains("pull"), "the p key must be listed:\n{text}");
+        assert!(
+            text.contains("saves"),
+            "pulling writes the current session; the overlay must say so:\n{text}"
+        );
+    }
+
+    #[test]
+    fn every_help_line_is_the_same_width() {
+        // The overlay is a fixed-width field; a short line leaves a ragged
+        // hole in the box.
+        for line in HELP_LINES {
+            assert_eq!(
+                line.chars().count(),
+                HELP_INNER_W as usize,
+                "ragged help line: {line:?}"
             );
         }
     }
