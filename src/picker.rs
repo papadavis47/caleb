@@ -96,10 +96,12 @@ const LIST_WIDTH: u16 = 44;
 /// Width the list lays its rows out in: the pane less a matching gutter, so
 /// the counts stop the same distance from the divider as the preview text
 /// starts from it.
-const ROW_WIDTH: u16 = LIST_WIDTH - PREVIEW_PAD;
+const ROW_WIDTH: u16 = LIST_WIDTH - GUTTER;
 
-/// Columns of breathing room between the divider and the preview text.
-const PREVIEW_PAD: u16 = 2;
+/// Columns of breathing room on either side of the divider — the list's
+/// counts stop this far short of it, the preview's text starts this far past
+/// it. One constant so the two sides cannot drift apart.
+const GUTTER: u16 = 3;
 
 /// Below this the preview is dropped entirely and the list runs full width,
 /// rather than squeezing both into a column that suits neither.
@@ -280,7 +282,7 @@ pub fn run(dir: &Path, tui: &mut Tui, palette: Palette) -> std::io::Result<Choic
         // resize between keypresses cannot scroll against a stale height.
         let size = tui.terminal().size()?;
         let page = size.height.saturating_sub(3) as usize;
-        let preview_width = size.width.saturating_sub(LIST_WIDTH + 1 + PREVIEW_PAD);
+        let preview_width = size.width.saturating_sub(LIST_WIDTH + 1 + GUTTER);
         let preview_height = visible
             .get(cursor)
             .map_or(0, |e| wrapped_lines(&e.contents, preview_width));
@@ -407,7 +409,7 @@ fn draw_preview(
                 Block::default()
                     .borders(Borders::LEFT)
                     .border_style(Style::default().fg(palette.muted))
-                    .padding(Padding::left(PREVIEW_PAD)),
+                    .padding(Padding::left(GUTTER)),
             )
             .wrap(Wrap { trim: false })
             .scroll((scroll.min(u16::MAX as usize) as u16, 0)),
@@ -1026,7 +1028,7 @@ mod tests {
         let (x, _) = find(&buf, "# Session");
         assert_eq!(
             x,
-            LIST_WIDTH + 1 + PREVIEW_PAD,
+            LIST_WIDTH + 1 + GUTTER,
             "list width, then the border, then the padding"
         );
     }
@@ -1072,7 +1074,7 @@ mod tests {
     }
 
     #[test]
-    fn the_counts_end_two_columns_short_of_the_divider() {
+    fn the_counts_stop_a_gutter_short_of_the_divider() {
         let e = entry_with("2026-05-31_14-30.md", 2, 3, SAMPLE);
         let visible = vec![&e];
         let buf = render(100, 12, &view(&visible));
@@ -1080,8 +1082,30 @@ mod tests {
         let end = x as usize + "2 open / 3 total".chars().count();
         assert_eq!(
             end,
-            (LIST_WIDTH - PREVIEW_PAD) as usize,
+            (LIST_WIDTH - GUTTER) as usize,
             "counts should stop a gutter short of the border at {LIST_WIDTH}"
+        );
+    }
+
+    #[test]
+    fn the_gutters_on_both_sides_of_the_divider_match() {
+        // Measured off the rendered screen, naming no constant: this is what
+        // catches one side being widened without the other.
+        let e = entry_with("2026-05-31_14-30.md", 2, 3, SAMPLE);
+        let visible = vec![&e];
+        let buf = render(100, 12, &view(&visible));
+
+        let (divider, _) = find(&buf, "\u{2502}");
+        let (counts, _) = find(&buf, "2 open / 3 total");
+        let counts_end = counts + "2 open / 3 total".chars().count() as u16;
+        let (text, _) = find(&buf, "# Session");
+
+        assert_eq!(
+            divider - counts_end,
+            text - divider - 1,
+            "left gutter {} vs right gutter {}",
+            divider - counts_end,
+            text - divider - 1
         );
     }
 }
