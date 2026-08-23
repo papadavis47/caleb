@@ -93,6 +93,11 @@ pub fn filter_visible(entries: &[Entry], show_all: bool) -> Vec<&Entry> {
 /// is 43, so rows never truncate.
 const LIST_WIDTH: u16 = 44;
 
+/// Width the list lays its rows out in: the pane less a matching gutter, so
+/// the counts stop the same distance from the divider as the preview text
+/// starts from it.
+const ROW_WIDTH: u16 = LIST_WIDTH - PREVIEW_PAD;
+
 /// Columns of breathing room between the divider and the preview text.
 const PREVIEW_PAD: u16 = 2;
 
@@ -140,6 +145,22 @@ pub fn wrapped_lines(contents: &str, width: u16) -> usize {
         .lines()
         .map(|l| l.chars().count().div_ceil(width).max(1))
         .sum()
+}
+
+/// One list row: name on the left, counts flush right.
+///
+/// Laid out in a fixed `ROW_WIDTH` rather than the pane's actual width, so
+/// the divider never moves when the visible set changes — and so the counts
+/// do not drift to the far edge of a wide terminal when the preview is off.
+/// A name too long to align keeps one space before its counts instead of
+/// running into them.
+fn row_text(entry: &Entry, selected: bool) -> String {
+    let marker = if selected { "▸ " } else { "  " };
+    let left = format!("{marker}{}", pretty_name(&entry.name));
+    let right = format!("{} open / {} total", entry.open, entry.total);
+    let used = left.chars().count() + right.chars().count();
+    let gap = (ROW_WIDTH as usize).saturating_sub(used).max(1);
+    format!("{left}{}{right}", " ".repeat(gap))
 }
 
 pub fn preview_fits(width: u16) -> bool {
@@ -461,16 +482,7 @@ fn draw(frame: &mut Frame, view: &PickerView) {
                 if i == cursor {
                     style = style.add_modifier(Modifier::REVERSED);
                 }
-                let marker = if i == cursor { "▸ " } else { "  " };
-                ListItem::new(
-                    Line::from(format!(
-                        "{marker}{}   {} open / {} total",
-                        pretty_name(&e.name),
-                        e.open,
-                        e.total
-                    ))
-                    .style(style),
-                )
+                ListItem::new(Line::from(row_text(e, i == cursor)).style(style))
             })
             .collect();
         let mut state = ListState::default();
@@ -1016,6 +1028,60 @@ mod tests {
             x,
             LIST_WIDTH + 1 + PREVIEW_PAD,
             "list width, then the border, then the padding"
+        );
+    }
+
+    #[test]
+    fn a_row_right_aligns_its_counts() {
+        let e = entry("2026-05-31_14-30.md", 2, 3);
+        let text = row_text(&e, false);
+        assert_eq!(
+            text.chars().count(),
+            ROW_WIDTH as usize,
+            "the row should span the pane less its gutter: {text:?}"
+        );
+        assert!(text.ends_with("2 open / 3 total"), "{text:?}");
+        assert!(text.starts_with("  2026-05-31  14:30"), "{text:?}");
+    }
+
+    #[test]
+    fn wider_counts_stay_flush_with_narrower_ones() {
+        // The whole point: variable-width counts still end on the same column.
+        let narrow = row_text(&entry("2026-05-31_14-30.md", 2, 3), false);
+        let wide = row_text(&entry("2026-05-30_10-00.md", 12, 137), false);
+        assert_eq!(narrow.chars().count(), wide.chars().count());
+    }
+
+    #[test]
+    fn the_selected_row_carries_the_marker() {
+        let e = entry("2026-05-31_14-30.md", 2, 3);
+        assert!(row_text(&e, true).starts_with("\u{25b8} "));
+        assert!(row_text(&e, false).starts_with("  "));
+    }
+
+    #[test]
+    fn a_row_too_wide_to_align_keeps_a_space_between_its_halves() {
+        // A hand-named file can be longer than the pane; the name and the
+        // counts must not run together into one unreadable string.
+        let e = entry("a-very-long-hand-written-session-name-indeed.md", 12, 137);
+        let text = row_text(&e, false);
+        assert!(
+            text.contains(" 12 open / 137 total"),
+            "halves should stay separated: {text:?}"
+        );
+    }
+
+    #[test]
+    fn the_counts_end_two_columns_short_of_the_divider() {
+        let e = entry_with("2026-05-31_14-30.md", 2, 3, SAMPLE);
+        let visible = vec![&e];
+        let buf = render(100, 12, &view(&visible));
+        let (x, _) = find(&buf, "2 open / 3 total");
+        let end = x as usize + "2 open / 3 total".chars().count();
+        assert_eq!(
+            end,
+            (LIST_WIDTH - PREVIEW_PAD) as usize,
+            "counts should stop a gutter short of the border at {LIST_WIDTH}"
         );
     }
 }
