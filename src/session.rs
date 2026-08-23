@@ -128,6 +128,54 @@ pub fn resume(dir: &Path, original: &str, ts: Timestamp) -> Result<Session, Resu
     Ok(loaded)
 }
 
+/// Move the tasks at `indices` out of `source.active` and into
+/// `target.active`, leaving a completed copy behind in `source.completed`.
+/// Returns how many actually moved.
+///
+/// `indices` may arrive unsorted, duplicated, or out of range; the caller is
+/// a picker, not a proof. An index naming a task that is already `done` is
+/// ignored too — `markdown::parse` files tasks by the heading above them, not
+/// by their checkbox, so `active` can hold a hand-written `- [x]`.
+///
+/// Rust note: the removals walk the indices in *descending* order, because
+/// `Vec::remove` shifts everything after the hole down by one — taking index 0
+/// first would leave every later index pointing at the wrong task. The
+/// collected tasks are then replayed in ascending order so the target reads in
+/// the source's original order.
+pub fn pull_tasks(source: &mut Session, target: &mut Session, indices: &[usize]) -> usize {
+    let mut wanted: Vec<usize> = indices
+        .iter()
+        .copied()
+        .filter(|&i| source.active.get(i).is_some_and(|t| !t.done))
+        .collect();
+    wanted.sort_unstable();
+    wanted.dedup();
+
+    let taken: Vec<Task> = wanted
+        .iter()
+        .rev()
+        .map(|&i| source.active.remove(i))
+        .collect();
+
+    let moved = taken.len();
+    for task in taken.into_iter().rev() {
+        target.active.push(Task {
+            text: task.text.clone(),
+            done: false,
+        });
+        source.completed.push(Task {
+            text: task.text,
+            done: true,
+        });
+    }
+
+    if moved > 0 {
+        source.dirty = true;
+        target.dirty = true;
+    }
+    moved
+}
+
 impl Session {
     pub fn tasks(&self, pane: Pane) -> &[Task] {
         match pane {
@@ -458,5 +506,83 @@ mod tests {
         let err = resume(dir.path(), "vanished.md", ts_at(9, 0)).unwrap_err();
         assert!(matches!(err, ResumeError::Rename { .. }));
         assert!(err.to_string().contains("vanished.md"));
+    }
+
+    #[test]
+    fn pull_tasks_moves_the_named_task_and_completes_it_in_the_source() {
+        let mut source = crate::test_util::session_with(&["keep me", "take me"]);
+        let mut target = crate::test_util::session_with(&["already here"]);
+
+        let moved = pull_tasks(&mut source, &mut target, &[1]);
+
+        assert_eq!(moved, 1);
+        assert_eq!(source.active.len(), 1);
+        assert_eq!(source.active[0].text, "keep me");
+        assert_eq!(source.completed.len(), 1);
+        assert_eq!(source.completed[0].text, "take me");
+        assert!(source.completed[0].done, "the source's copy reads as done");
+        assert_eq!(target.active.len(), 2);
+        assert_eq!(target.active[1].text, "take me");
+        assert!(!target.active[1].done, "the target's copy is open work");
+        assert!(source.dirty && target.dirty);
+    }
+
+    #[test]
+    fn pull_tasks_keeps_source_order_and_survives_unsorted_duplicate_indices() {
+        // Removing low indices first would shift the ones still to come, so
+        // the walk goes descending; the target must still read in file order.
+        let mut source = crate::test_util::session_with(&["zero", "one", "two", "three"]);
+        let mut target = crate::test_util::session_with(&[]);
+
+        let moved = pull_tasks(&mut source, &mut target, &[3, 0, 3]);
+
+        assert_eq!(moved, 2, "the duplicate index counts once");
+        let text: Vec<&str> = target.active.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(text, ["zero", "three"]);
+        let left: Vec<&str> = source.active.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(left, ["one", "two"]);
+        let done: Vec<&str> = source.completed.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(done, ["zero", "three"]);
+    }
+
+    #[test]
+    fn pull_tasks_ignores_out_of_range_indices() {
+        let mut source = crate::test_util::session_with(&["only"]);
+        let mut target = crate::test_util::session_with(&[]);
+
+        assert_eq!(pull_tasks(&mut source, &mut target, &[9]), 0);
+        assert_eq!(source.active.len(), 1);
+        assert!(target.active.is_empty());
+        assert!(!source.dirty, "a no-op must not mark anything unsaved");
+        assert!(!target.dirty);
+    }
+
+    #[test]
+    fn pull_tasks_with_no_indices_is_a_noop() {
+        let mut source = crate::test_util::session_with(&["only"]);
+        let mut target = crate::test_util::session_with(&[]);
+
+        assert_eq!(pull_tasks(&mut source, &mut target, &[]), 0);
+        assert!(!source.dirty);
+        assert!(!target.dirty);
+    }
+
+    #[test]
+    fn pull_tasks_skips_a_task_that_is_already_done() {
+        // `markdown::parse` files tasks by heading, not by checkbox, so a
+        // hand-written `- [x]` under `## Active` lands in `active`. Pulling it
+        // would resurrect finished work as open.
+        let mut source = crate::test_util::session_with(&["open one"]);
+        source
+            .active
+            .push(crate::test_util::task("secretly done", true));
+        source.dirty = false;
+        let mut target = crate::test_util::session_with(&[]);
+
+        assert_eq!(pull_tasks(&mut source, &mut target, &[0, 1]), 1);
+        assert_eq!(target.active.len(), 1);
+        assert_eq!(target.active[0].text, "open one");
+        assert_eq!(source.active.len(), 1, "the done one stays put");
+        assert_eq!(source.active[0].text, "secretly done");
     }
 }
