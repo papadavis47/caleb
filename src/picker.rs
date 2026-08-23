@@ -11,7 +11,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph};
 use std::path::Path;
 use std::time::Instant;
 
@@ -132,21 +132,108 @@ fn preview_line(raw: &str, palette: Palette) -> Style {
     }
 }
 
-/// Rows `contents` occupies once wrapped into `width` columns.
+/// Columns a wrapped continuation is indented by, so it lines up under the
+/// text of its first row rather than under the checkbox.
 ///
-/// A character-count ceiling, not a word-wrap simulation: ratatui breaks on
-/// word boundaries, so this can undercount a line by a row. It exists only to
-/// stop scrolling somewhere near the end rather than into empty space, and it
-/// is exact for the common case of lines that fit.
-pub fn wrapped_lines(contents: &str, width: u16) -> usize {
-    if width == 0 {
-        return contents.lines().count();
+/// `- [ ] ` is six columns, which is why a task's continuations hang by six.
+/// Nothing else in a session file has a marker worth aligning under, so
+/// headings and free text hang by nothing.
+fn hanging_indent(line: &str) -> usize {
+    if line.starts_with("- [ ] ") || line.starts_with("- [x] ") || line.starts_with("- [X] ") {
+        6
+    } else {
+        0
     }
+}
+
+/// Byte offset of the `n`th character, for slicing without splitting a
+/// multi-byte sequence.
+fn char_index(s: &str, n: usize) -> usize {
+    s.char_indices().nth(n).map_or(s.len(), |(i, _)| i)
+}
+
+/// Break one line into rows of at most `width` columns, hanging continuations
+/// under the first row's text.
+///
+/// caleb wraps its own preview rather than handing the job to ratatui's
+/// `Wrap`, which has no notion of a hanging indent: a task that spilled over
+/// put its continuation hard against the left edge, level with the `- [ ]`,
+/// so a long task and a new one looked alike at a glance. Wrapping here also
+/// makes [`wrapped_lines`] exact, which is what the scroll clamp measures
+/// against.
+///
+/// Greedy fill on whitespace. A word too long to fit on a line of its own is
+/// broken mid-word — the alternative is a row that overflows the pane. A
+/// leading indent is preserved and added to the hang, because the preview
+/// shows the file as written and hand-added notes may be indented.
+///
+/// Rust note: runs of whitespace inside a wrapped line are collapsed to one
+/// space, a consequence of `split_whitespace`. Lines short enough to fit
+/// return untouched, so this only ever affects text that had to move anyway.
+pub fn wrap_line(raw: &str, width: u16) -> Vec<String> {
     let width = width as usize;
-    contents
-        .lines()
-        .map(|l| l.chars().count().div_ceil(width).max(1))
-        .sum()
+    if width == 0 || raw.chars().count() <= width {
+        return vec![raw.to_string()];
+    }
+
+    let lead = raw.chars().take_while(|c| c.is_whitespace()).count();
+    let body = raw.trim_start();
+    // Never indent so far that no room is left for text.
+    let indent = (lead + hanging_indent(body)).min(width - 1);
+    let pad = " ".repeat(indent);
+
+    let mut out: Vec<String> = Vec::new();
+    // `cur` always carries its own indent, so the first row keeps the line's
+    // original leading whitespace and every later row starts from `pad`.
+    let mut cur = " ".repeat(lead);
+    let mut has_word = false;
+
+    for word in body.split_whitespace() {
+        let mut rest = word;
+        loop {
+            let separator = usize::from(has_word);
+            let room = width.saturating_sub(cur.chars().count() + separator);
+            if rest.chars().count() <= room {
+                if has_word {
+                    cur.push(' ');
+                }
+                cur.push_str(rest);
+                has_word = true;
+                break;
+            }
+            if has_word {
+                // Something is already on this row: end it and try the word
+                // again against a fresh one.
+                out.push(std::mem::replace(&mut cur, pad.clone()));
+                has_word = false;
+                continue;
+            }
+            // A fresh row and the word still does not fit: break it. `room`
+            // can be zero when the indent eats the line, so take at least one
+            // character or this loop never advances.
+            let idx = char_index(rest, room.max(1));
+            cur.push_str(&rest[..idx]);
+            out.push(std::mem::replace(&mut cur, pad.clone()));
+            rest = &rest[idx..];
+            if rest.is_empty() {
+                break;
+            }
+        }
+    }
+
+    if has_word || out.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// Rows `contents` occupies in a pane `width` columns wide.
+///
+/// Exact, because it counts the rows [`wrap_line`] actually produces. The
+/// scroll clamp measures against this, so an over- or under-count would stop
+/// scrolling short of the end or let it run into blank space.
+pub fn wrapped_lines(contents: &str, width: u16) -> usize {
+    contents.lines().map(|l| wrap_line(l, width).len()).sum()
 }
 
 /// One list row: name on the left, counts flush right.
@@ -395,11 +482,20 @@ fn draw_preview(
     scroll: usize,
     palette: Palette,
 ) {
+    // Columns left for text once the border and the gutter have taken theirs.
+    // Wrapping happens here rather than in `Paragraph::wrap` so continuations
+    // can hang under their task text; see `wrap_line`.
+    let text_width = area.width.saturating_sub(1 + GUTTER);
     let lines: Vec<Line> = entry
         .map(|e| {
             e.contents
                 .lines()
-                .map(|raw| Line::from(raw).style(preview_line(raw, palette)))
+                .flat_map(|raw| {
+                    let style = preview_line(raw, palette);
+                    wrap_line(raw, text_width)
+                        .into_iter()
+                        .map(move |row| Line::from(row).style(style))
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -411,7 +507,6 @@ fn draw_preview(
                     .border_style(Style::default().fg(palette.muted))
                     .padding(Padding::left(GUTTER)),
             )
-            .wrap(Wrap { trim: false })
             .scroll((scroll.min(u16::MAX as usize) as u16, 0)),
         area,
     );
@@ -1004,9 +1099,15 @@ mod tests {
 
     #[test]
     fn an_overlong_line_occupies_the_rows_it_wraps_onto() {
-        // 150 bytes is the task cap; at 30 columns that is five rows.
+        // 150 bytes is the task cap. The count is exact now rather than a
+        // character-count estimate, so it accounts for the hanging indent:
+        // continuations carry six columns of padding and hold that much less
+        // text. What matters is that no row overflows the pane.
         let long = format!("- [ ] {}", "x".repeat(144));
-        assert_eq!(wrapped_lines(&long, 30), 5);
+        let rows = wrap_line(&long, 30);
+        assert_eq!(wrapped_lines(&long, 30), rows.len());
+        assert!(rows.len() > 5, "the indent costs rows: {}", rows.len());
+        assert!(rows.iter().all(|r| r.chars().count() <= 30));
     }
 
     #[test]
@@ -1107,5 +1208,74 @@ mod tests {
             divider - counts_end,
             text - divider - 1
         );
+    }
+
+    #[test]
+    fn a_line_that_fits_comes_back_untouched() {
+        assert_eq!(wrap_line("- [ ] short", 40), vec!["- [ ] short"]);
+    }
+
+    #[test]
+    fn a_wrapped_task_hangs_its_continuations_under_the_text() {
+        let out = wrap_line("- [ ] alpha beta gamma delta", 20);
+        assert_eq!(out[0], "- [ ] alpha beta");
+        assert!(
+            out[1].starts_with("      "),
+            "continuation should clear the checkbox: {:?}",
+            out[1]
+        );
+        assert_eq!(out[1].trim(), "gamma delta");
+    }
+
+    #[test]
+    fn a_wrapped_heading_gets_no_hanging_indent() {
+        let out = wrap_line("## a heading long enough to wrap here", 20);
+        assert!(
+            !out[1].starts_with(' '),
+            "only task lines hang: {:?}",
+            out[1]
+        );
+    }
+
+    #[test]
+    fn a_word_longer_than_the_pane_is_broken() {
+        let out = wrap_line(&format!("- [ ] {}", "x".repeat(30)), 20);
+        assert!(out.len() > 1, "must not overflow the pane: {out:?}");
+        assert!(
+            out.iter().all(|l| l.chars().count() <= 20),
+            "every piece must fit: {out:?}"
+        );
+    }
+
+    #[test]
+    fn wrapping_preserves_a_hand_written_indent() {
+        // Hand-edited notes are the reason the preview shows raw text; losing
+        // their leading indent would defeat that.
+        let out = wrap_line("    a note that is long enough to need wrapping", 20);
+        assert!(out[0].starts_with("    a note"), "{:?}", out[0]);
+        assert!(
+            out[1].starts_with("    "),
+            "continuation keeps it: {:?}",
+            out[1]
+        );
+    }
+
+    #[test]
+    fn a_blank_line_survives_wrapping() {
+        assert_eq!(wrap_line("", 20), vec![""]);
+    }
+
+    #[test]
+    fn wrapping_to_no_width_returns_the_line_untouched() {
+        assert_eq!(wrap_line("- [ ] anything", 0), vec!["- [ ] anything"]);
+    }
+
+    #[test]
+    fn the_height_of_a_file_is_the_sum_of_its_wrapped_lines() {
+        // wrapped_lines is now exact rather than a character-count estimate.
+        let contents = "# Session\n\n- [ ] alpha beta gamma delta\n";
+        let expected: usize = contents.lines().map(|l| wrap_line(l, 20).len()).sum();
+        assert_eq!(wrapped_lines(contents, 20), expected);
+        assert!(expected > contents.lines().count(), "the long task wraps");
     }
 }
