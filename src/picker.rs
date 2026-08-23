@@ -11,7 +11,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph, Wrap};
 use std::path::Path;
 use std::time::Instant;
 
@@ -92,6 +92,9 @@ pub fn filter_visible(entries: &[Entry], show_all: bool) -> Vec<&Entry> {
 /// widest a row can render — a collision suffix and three-digit counts —
 /// is 43, so rows never truncate.
 const LIST_WIDTH: u16 = 44;
+
+/// Columns of breathing room between the divider and the preview text.
+const PREVIEW_PAD: u16 = 2;
 
 /// Below this the preview is dropped entirely and the list runs full width,
 /// rather than squeezing both into a column that suits neither.
@@ -256,7 +259,7 @@ pub fn run(dir: &Path, tui: &mut Tui, palette: Palette) -> std::io::Result<Choic
         // resize between keypresses cannot scroll against a stale height.
         let size = tui.terminal().size()?;
         let page = size.height.saturating_sub(3) as usize;
-        let preview_width = size.width.saturating_sub(LIST_WIDTH + 1);
+        let preview_width = size.width.saturating_sub(LIST_WIDTH + 1 + PREVIEW_PAD);
         let preview_height = visible
             .get(cursor)
             .map_or(0, |e| wrapped_lines(&e.contents, preview_width));
@@ -382,7 +385,8 @@ fn draw_preview(
             .block(
                 Block::default()
                     .borders(Borders::LEFT)
-                    .border_style(Style::default().fg(palette.muted)),
+                    .border_style(Style::default().fg(palette.muted))
+                    .padding(Padding::left(PREVIEW_PAD)),
             )
             .wrap(Wrap { trim: false })
             .scroll((scroll.min(u16::MAX as usize) as u16, 0)),
@@ -806,10 +810,14 @@ mod tests {
 
     const SAMPLE: &str = "# Session 2026-05-31 14:30\n\n## Active\n\n- [ ] wire up the parser\n\n## Completed\n\n- [x] read the chapter\n";
 
+    /// Column and row where `needle` starts. `str::find` gives a byte offset,
+    /// and rows carry multi-byte glyphs (`▸`, `│`), so the count of characters
+    /// before the match is what lines up with a cell coordinate.
     fn find(buf: &ratatui::buffer::Buffer, needle: &str) -> (u16, u16) {
         for y in 0..buf.area.height {
-            if let Some(x) = row(buf, y).find(needle) {
-                return (x as u16, y);
+            let line = row(buf, y);
+            if let Some(byte) = line.find(needle) {
+                return (line[..byte].chars().count() as u16, y);
             }
         }
         panic!("{needle:?} is not on screen:\n{}", screen(buf));
@@ -995,5 +1003,19 @@ mod tests {
     #[test]
     fn a_zero_width_pane_does_not_divide_by_zero() {
         assert_eq!(wrapped_lines("abc\n", 0), 1);
+    }
+
+    #[test]
+    fn the_preview_text_clears_the_border() {
+        // Text hard against the divider reads as though it belongs to it.
+        let e = entry_with("2026-05-31_14-30.md", 1, 2, SAMPLE);
+        let visible = vec![&e];
+        let buf = render(100, 12, &view(&visible));
+        let (x, _) = find(&buf, "# Session");
+        assert_eq!(
+            x,
+            LIST_WIDTH + 1 + PREVIEW_PAD,
+            "list width, then the border, then the padding"
+        );
     }
 }
