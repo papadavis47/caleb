@@ -6,8 +6,16 @@
 //! `picker`'s helpers testable. [`run`] is only a draw/read/dispatch loop.
 
 use crate::markdown;
-use crate::picker::Entry;
-use crossterm::event::KeyCode;
+use crate::picker::{self, Entry};
+use crate::tui::Tui;
+use crate::ui::Palette;
+use crossterm::event::{self, Event, KeyCode};
+use ratatui::Frame;
+use ratatui::layout::{Constraint, Layout};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::Line;
+use ratatui::widgets::{List, ListItem};
+use std::path::Path;
 
 /// A past session with something worth pulling.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,9 +195,138 @@ impl PullState {
     }
 }
 
+/// Marker in front of the row the cursor is on. Same glyph the picker uses.
+const CURSOR: &str = "\u{25b8}";
+
+/// Column the session rows' open-counts start on, so they line up under each
+/// other without the picker's full right-alignment machinery.
+const COUNT_COLUMN: usize = 26;
+
+/// Draw whichever stage is current. Chrome is monochrome, like the picker's.
+fn draw(frame: &mut Frame, state: &PullState, palette: Palette) {
+    let _ = palette;
+    let [header, body, status] = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .areas(frame.area());
+
+    let (title, rows, hint) = if state.is_empty() {
+        (
+            " caleb \u{2014} pull open tasks".to_string(),
+            vec!["  no other sessions have open tasks".to_string()],
+            " any key returns".to_string(),
+        )
+    } else {
+        match state.stage {
+            Stage::Sessions => (
+                " caleb \u{2014} pull open tasks from".to_string(),
+                state
+                    .candidates
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| session_row(c, i == state.session_cursor))
+                    .collect(),
+                " j/k move   Enter choose   Esc cancel".to_string(),
+            ),
+            Stage::Tasks => {
+                let candidate = state.current().expect("a stage-two session exists");
+                (
+                    format!(
+                        " caleb \u{2014} open tasks in {}",
+                        picker::pretty_name(&candidate.name)
+                    ),
+                    candidate
+                        .open
+                        .iter()
+                        .zip(&state.selected)
+                        .enumerate()
+                        .map(|(i, ((_, text), &picked))| {
+                            task_row(text, picked, i == state.task_cursor)
+                        })
+                        .collect(),
+                    format!(
+                        " space toggle   a all/none   Enter pull {}   Esc back",
+                        state.selected.iter().filter(|&&s| s).count()
+                    ),
+                )
+            }
+        }
+    };
+
+    frame.render_widget(
+        Line::from(title).style(Style::default().add_modifier(Modifier::BOLD)),
+        ratatui::layout::Rect {
+            height: 1,
+            ..header
+        },
+    );
+    frame.render_widget(
+        List::new(rows.into_iter().map(ListItem::new).collect::<Vec<_>>()),
+        body,
+    );
+    frame.render_widget(
+        Line::from(hint).style(Style::default().add_modifier(Modifier::DIM)),
+        status,
+    );
+}
+
+/// `▸ 2026-05-31  14:30         2 open`. A hand-named session longer than
+/// `COUNT_COLUMN` keeps one space before its count rather than running the two
+/// halves together, which is what the `.max(1)` is for.
+fn session_row(candidate: &Candidate, selected: bool) -> String {
+    let marker = if selected { CURSOR } else { " " };
+    let name = picker::pretty_name(&candidate.name);
+    let pad = COUNT_COLUMN.saturating_sub(name.chars().count());
+    format!(
+        "{marker} {name}{:pad$}{} open",
+        "",
+        candidate.open.len(),
+        pad = pad.max(1)
+    )
+}
+
+fn task_row(text: &str, picked: bool, selected: bool) -> String {
+    let marker = if selected { CURSOR } else { " " };
+    let box_ = if picked { 'x' } else { ' ' };
+    format!("{marker} [{box_}] {text}")
+}
+
+/// Run the two-stage picker to a decision. `None` means the user cancelled.
+///
+/// Mouse events are ignored on purpose: a stray click must not toggle a task
+/// the user did not mean to include, and there is no drag or scroll here worth
+/// the hit-testing.
+pub fn run(
+    dir: &Path,
+    tui: &mut Tui,
+    palette: Palette,
+    current: &str,
+) -> std::io::Result<Option<Pulled>> {
+    let entries = picker::scan(dir)?;
+    let mut state = PullState::new(&entries, current);
+
+    loop {
+        tui.terminal().draw(|frame| draw(frame, &state, palette))?;
+
+        if let Event::Key(key) = event::read()?
+            && key.kind == event::KeyEventKind::Press
+        {
+            match state.on_key(key.code) {
+                Step::Stay => {}
+                Step::Cancel => return Ok(None),
+                Step::Pull(pulled) => return Ok(Some(pulled)),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     fn entry(name: &str, contents: &str) -> Entry {
         let counts = markdown::count_tasks(contents);
@@ -205,6 +342,65 @@ mod tests {
 
     fn state() -> PullState {
         PullState::new(&[entry("2026-05-31_14-30.md", TWO_OPEN)], "current.md")
+    }
+
+    fn render(width: u16, height: u16, state: &PullState) -> ratatui::buffer::Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|f| draw(f, state, crate::ui::Palette::new(true)))
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    fn screen(buf: &ratatui::buffer::Buffer) -> String {
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_session_stage_lists_names_and_open_counts() {
+        let text = screen(&render(70, 8, &state()));
+        assert!(text.contains("2026-05-31  14:30"), "{text}");
+        assert!(text.contains("2 open"), "{text}");
+        assert!(text.contains("Enter choose"), "{text}");
+    }
+
+    #[test]
+    fn the_task_stage_shows_checkboxes_and_a_live_count() {
+        let mut s = state();
+        s.on_key(KeyCode::Enter);
+        let text = screen(&render(70, 8, &s));
+        assert!(text.contains("[x] alpha"), "{text}");
+        assert!(text.contains("[x] beta"), "{text}");
+        assert!(text.contains("Enter pull 2"), "{text}");
+
+        s.on_key(KeyCode::Char(' '));
+        let text = screen(&render(70, 8, &s));
+        assert!(text.contains("[ ] alpha"), "{text}");
+        assert!(
+            text.contains("Enter pull 1"),
+            "the count must follow: {text}"
+        );
+    }
+
+    #[test]
+    fn the_task_stage_headline_names_the_session() {
+        let mut s = state();
+        s.on_key(KeyCode::Enter);
+        let text = screen(&render(70, 8, &s));
+        assert!(text.contains("2026-05-31  14:30"), "{text}");
+    }
+
+    #[test]
+    fn an_empty_state_says_so() {
+        let text = screen(&render(70, 8, &PullState::new(&[], "current.md")));
+        assert!(text.contains("no other sessions have open tasks"), "{text}");
     }
 
     #[test]
