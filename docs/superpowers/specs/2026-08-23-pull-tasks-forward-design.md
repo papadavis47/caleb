@@ -60,14 +60,23 @@ Full-screen, replacing the session view for the duration.
  j/k move   Enter choose   Esc cancel
 ```
 
-- Lists sessions with `open > 0` only, **excluding the current session's own
-  file** (matched on `Session::filename`). A session with nothing open has
-  nothing to give, so there is no `a` show-all toggle.
+- Lists sessions that have at least one **pullable** task, **excluding the
+  current session's own file** (matched on `Session::filename`). A session with
+  nothing open has nothing to give, so there is no `a` show-all toggle.
+
+  "Pullable" is narrower than the picker's `open` count, and the difference
+  matters. `markdown::count_tasks` — which feeds `Entry::open` and `--clean` —
+  counts every `- [ ]` line wherever it sits, while `markdown::parse` sorts
+  tasks by the heading they fall under, so a hand-written `- [ ]` beneath
+  `## Completed` is `open` but is not in `parse`'s `active` list. A pull moves
+  tasks out of `active`, so the pullable set is **`parse(contents).active`
+  filtered to `!done`**, and stage 1 shows that count. Using `Entry::open`
+  would let stage 1 advertise a session whose stage 2 is empty.
 - Newest first — `picker::scan` order, unchanged.
 - No preview pane. Stage 2 shows the tasks themselves, which is what a preview
   would have been for. This also keeps `pull` from needing any of `picker`'s
-  layout constants. Session names are rendered through `picker::pretty_name`,
-  which becomes `pub(crate)`, so both screens spell a session the same way.
+  layout constants. Session names are rendered through `picker::pretty_name`
+  (already `pub`), so both screens spell a session the same way.
 - An empty list renders `  no other sessions have open tasks`, and **any** key
   cancels — there is nothing on the screen to act on.
 
