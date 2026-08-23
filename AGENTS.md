@@ -148,7 +148,7 @@ Two things bite:
 
 ```
 Navigation   j/k or ↑/↓     h / ← → / l  g / G
-Editing      a add   d delete   space|x toggle   J/K reorder
+Editing      a add   d delete   space|x toggle   J/K reorder   p pull
 App          s save   q quit (auto-saves)   ? help   Esc cancel/dismiss
 Mouse        wheel scrolls focused pane
              click selects a task and focuses its pane

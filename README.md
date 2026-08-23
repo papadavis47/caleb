@@ -62,8 +62,9 @@ The picker hides sessions with no unfinished tasks; press `a` to show all.
 
 Press `p` in a session to pull unfinished work forward. Choose a past session,
 then tick which of its open tasks you want; they arrive in your Active pane and
-are checked off in the session they came from. That session drops to zero open
-tasks, so `caleb --clean` can then sweep it. Pulling saves the current session.
+are checked off in the session they came from. Drain a session completely and it
+drops to zero open tasks, so `caleb --clean` can then sweep it. Pulling saves the
+current session.
 
 `caleb --clean` clears those finished sessions off disk. It lists every
 session with no open tasks — including ones that never got a task — and
