@@ -5,7 +5,8 @@
 //! testable without a pty.
 
 use crate::model::{MAX_TASK_BYTES, Pane};
-use crate::session::{SaveError, Session};
+use crate::pull;
+use crate::session::{self, SaveError, Session};
 use crate::tui::Tui;
 use crate::ui::{self, ClickTracker, Overlay, Palette, PaneRects, ViewState};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
@@ -23,6 +24,8 @@ pub enum RunError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Save(#[from] SaveError),
+    #[error(transparent)]
+    Pull(#[from] crate::session::PullError),
 }
 
 /// What a screen coordinate resolves to.
@@ -37,6 +40,15 @@ pub enum Mode {
     Normal,
     AddInput,
     Help,
+}
+
+/// Work the event loop must do that `handle_key` cannot: it would need the
+/// terminal, and keeping `handle_key` terminal-free is what makes every
+/// binding testable without a pty.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    None,
+    Pull,
 }
 
 #[derive(Debug)]
@@ -96,22 +108,23 @@ impl App {
         }
     }
 
-    fn handle_key(&mut self, key: KeyEvent) -> Result<(), SaveError> {
+    fn handle_key(&mut self, key: KeyEvent) -> Result<Action, SaveError> {
         match self.mode {
             Mode::Help => {
                 // Any real key dismisses; it does not also act.
                 if !matches!(key.code, KeyCode::Null) {
                     self.mode = Mode::Normal;
                 }
-                return Ok(());
+                return Ok(Action::None);
             }
             Mode::AddInput => {
                 self.handle_input_key(key);
-                return Ok(());
+                return Ok(Action::None);
             }
             Mode::Normal => {}
         }
 
+        let mut action = Action::None;
         match key.code {
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Char('j') | KeyCode::Down => self.move_cursor(1),
@@ -144,11 +157,12 @@ impl App {
             KeyCode::Char('J') => self.swap_cursor(1),
             KeyCode::Char('K') => self.swap_cursor(-1),
             KeyCode::Char('?') => self.mode = Mode::Help,
+            KeyCode::Char('p') => action = Action::Pull,
             _ => {}
         }
 
         self.clamp_cursors();
-        Ok(())
+        Ok(action)
     }
 
     fn handle_input_key(&mut self, key: KeyEvent) {
@@ -381,13 +395,14 @@ impl App {
         event: &Event,
         now: Instant,
         pane_height: u16,
-    ) -> Result<(), SaveError> {
+    ) -> Result<Action, SaveError> {
         match *event {
             Event::Key(key) if key.kind == event::KeyEventKind::Press => {
                 // Press-only: terminals that also report releases would
                 // otherwise run every binding twice.
-                self.handle_key(key)?;
+                let action = self.handle_key(key)?;
                 self.adjust_scroll(pane_height);
+                return Ok(action);
             }
             Event::Mouse(m) => {
                 self.handle_mouse(m, now);
@@ -398,6 +413,29 @@ impl App {
             // Resize needs no work — the next draw reads the new size.
             _ => {}
         }
+        Ok(Action::None)
+    }
+
+    /// Hand the terminal to the pull screens, then apply whatever they return.
+    ///
+    /// A pull writes both files, so it doubles as a save point for the current
+    /// session — the help overlay says so.
+    fn pull(&mut self, tui: &mut Tui) -> Result<(), RunError> {
+        let Some(pulled) = pull::run(&self.storage_dir, tui, self.palette, &self.session.filename)?
+        else {
+            return Ok(());
+        };
+
+        let dir = self.storage_dir.clone();
+        let moved =
+            session::pull_from_file(&dir, &pulled.source, &mut self.session, &pulled.indices)?;
+
+        // Land the cursor on the first task that arrived. `moved` is what
+        // actually moved, which can be fewer than were asked for, so the
+        // arithmetic saturates rather than wrapping.
+        self.focused = Pane::Active;
+        self.active_cursor = self.session.active.len().saturating_sub(moved);
+        self.clamp_cursors();
         Ok(())
     }
 
@@ -414,7 +452,10 @@ impl App {
             // user is looking at when the next event arrives.
             let pane_height = self.pane_rects.active.height;
 
-            self.handle_event(&event::read()?, Instant::now(), pane_height)?;
+            let action = self.handle_event(&event::read()?, Instant::now(), pane_height)?;
+            if action == Action::Pull {
+                self.pull(tui)?;
+            }
         }
 
         if self.session.dirty {
@@ -467,9 +508,41 @@ mod tests {
         App::new(session, PathBuf::from("/nonexistent"), Palette::new(false))
     }
 
-    fn press(app: &mut App, c: char) {
+    fn press(app: &mut App, c: char) -> Action {
         app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE))
-            .unwrap();
+            .unwrap()
+    }
+
+    #[test]
+    fn p_requests_a_pull() {
+        let mut app = app_with(&["a"]);
+        assert_eq!(press(&mut app, 'p'), Action::Pull);
+    }
+
+    #[test]
+    fn other_keys_request_nothing() {
+        let mut app = app_with(&["a", "b"]);
+        for c in ['j', 'k', 'h', 'l', 'g', 'G', 'd', 'x', 'a', '?'] {
+            let mut app = app_with(&["a", "b"]);
+            assert_eq!(press(&mut app, c), Action::None, "{c} must not pull");
+        }
+        assert_eq!(press(&mut app, 'q'), Action::None);
+    }
+
+    #[test]
+    fn p_is_a_literal_character_while_adding_a_task() {
+        let mut app = app_with(&[]);
+        press(&mut app, 'a');
+        assert_eq!(press(&mut app, 'p'), Action::None);
+        assert_eq!(app.input, "p", "it must type, not pull");
+    }
+
+    #[test]
+    fn p_dismisses_the_help_overlay_without_pulling() {
+        let mut app = app_with(&[]);
+        press(&mut app, '?');
+        assert_eq!(press(&mut app, 'p'), Action::None);
+        assert_eq!(app.mode, Mode::Normal);
     }
 
     #[test]
