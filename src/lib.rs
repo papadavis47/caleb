@@ -12,6 +12,7 @@ pub mod clean;
 pub mod markdown;
 pub mod model;
 pub mod picker;
+pub mod pull;
 pub mod session;
 pub mod storage;
 #[cfg(test)]
