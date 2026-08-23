@@ -43,6 +43,7 @@ cargo install --path .
 caleb              # start a new session, named for the current time
 caleb -r           # resume a past session (interactive picker)
 caleb --list       # print all sessions to stdout
+caleb --clean      # delete sessions with no open tasks (asks first)
 caleb --help
 ```
 
@@ -58,6 +59,11 @@ which matters, since opening one renames it. It needs 80 columns; below that
 the list runs full width. `p` toggles it, `Ctrl-d`/`Ctrl-u` scroll it.
 
 The picker hides sessions with no unfinished tasks; press `a` to show all.
+
+`caleb --clean` clears those finished sessions off disk. It lists every
+session with no open tasks — including ones that never got a task — and
+deletes them only after you answer `y`. It must be used on its own; pairing
+it with another flag is a usage error.
 Press `d` to delete the highlighted session — it asks `y/n` first, and the
 file is removed from disk for good. Nothing else in caleb ever deletes a file.
 

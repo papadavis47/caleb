@@ -53,7 +53,7 @@ rename to now() → load → re-save.
 
 | File | Responsibility |
 |---|---|
-| `src/main.rs` | clap CLI, storage dir setup, dispatch, anyhow reporting, `--list` |
+| `src/main.rs` | clap CLI, storage dir setup, dispatch, anyhow reporting, `--list`, `--clean` prompt |
 | `src/lib.rs` | module declarations; everything with logic lives under it |
 | `src/model.rs` | `Task`, `Timestamp` (+ `Display`), `Pane`, `MAX_TASK_BYTES`; no deps |
 | `src/tui.rs` | crossterm raw mode / alt screen / mouse capture, RAII guard, panic hook |
@@ -61,11 +61,12 @@ rename to now() → load → re-save.
 | `src/session.rs` | `Session`; create / load / save / resume; mutations |
 | `src/markdown.rs` | `parse` / `serialize` / `count_tasks`, `ParseError` |
 | `src/storage.rs` | XDG resolution, timestamps, file stems, collision suffixes |
+| `src/clean.rs` | `--clean` rule: which scanned entries are cleanable, and removing them |
 | `src/ui.rs` | palette, frame layout, panes, status bar, input bar, help overlay, `ClickTracker` |
 | `src/picker.rs` | `-r` screen: scan, filter, preview pane, delete, selection loop |
 | `src/test_util.rs` | `cfg(test)` fixtures shared across module test blocks |
 | `tests/roundtrip.rs` | persistence across module seams, public API only |
-| `tests/cli.rs` | binary behavior: `--list`, `--help`, non-TTY failures |
+| `tests/cli.rs` | binary behavior: `--list`, `--clean`, `--help`, non-TTY failures |
 | `scripts/smoke.py` | pty end-to-end test: the main session screen |
 | `scripts/smoke_picker.py` | pty end-to-end test: the `-r` picker, delete + filtering + preview |
 
@@ -102,6 +103,7 @@ commit.
 caleb                Start a new session named for the current date/time
 caleb -r, --resume   Resume a past session via interactive picker
 caleb --list         Print all saved sessions to stdout and exit
+caleb --clean        Delete sessions with no open tasks, after a y/N prompt
 caleb -h, --help     Show help and exit
 caleb -v, --version  Show version and exit
 ```
@@ -110,6 +112,11 @@ caleb -v, --version  Show version and exit
 only via `-r`, which renames the picked file to `now()` so resumed work
 continues under a fresh timestamp. The refreshed header reaches disk at the
 next save.
+
+`--clean` conflicts with `--list` and `--resume`: it deletes files, so a
+companion flag is a usage error rather than something to silently ignore. It
+prompts on plain stdin/stdout instead of the TUI, so it works over a pipe;
+only `y`/`yes` proceeds, and EOF counts as no.
 
 `-v` is wired explicitly because clap defaults to `-V`. Pre-TUI errors print
 a short stderr message: exit `2` for usage errors (clap's default), `1` for

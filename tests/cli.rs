@@ -6,6 +6,7 @@
 //! they are the ones a user hits by piping or scripting caleb.
 
 use assert_cmd::Command;
+use predicates::prelude::PredicateBooleanExt;
 
 fn caleb(dir: &std::path::Path) -> Command {
     let mut cmd = Command::cargo_bin("caleb").unwrap();
@@ -135,4 +136,141 @@ fn no_writable_storage_location_is_a_clear_error() {
         .assert()
         .failure()
         .stderr(predicates::str::contains("XDG_DATA_HOME"));
+}
+
+/// A store with one finished session, one still open, and one empty file.
+fn store_with_mixed_sessions() -> tempfile::TempDir {
+    let home = tempfile::tempdir().unwrap();
+    let sessions = home.path().join("caleb");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(
+        sessions.join("2026-05-31_14-30.md"),
+        "# Session 2026-05-31 14:30\n\n## Active\n\n- [ ] open one\n",
+    )
+    .unwrap();
+    std::fs::write(
+        sessions.join("2026-05-30_09-00.md"),
+        "# Session 2026-05-30 09:00\n\n## Completed\n\n- [x] done\n",
+    )
+    .unwrap();
+    std::fs::write(
+        sessions.join("2026-05-29_08-00.md"),
+        "# Session 2026-05-29 08:00\n",
+    )
+    .unwrap();
+    home
+}
+
+#[test]
+fn clean_deletes_only_sessions_without_open_tasks() {
+    let home = store_with_mixed_sessions();
+    let sessions = home.path().join("caleb");
+
+    caleb(home.path())
+        .arg("--clean")
+        .write_stdin("y\n")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("Deleted 2 sessions"));
+
+    assert!(sessions.join("2026-05-31_14-30.md").exists());
+    assert!(!sessions.join("2026-05-30_09-00.md").exists());
+    assert!(!sessions.join("2026-05-29_08-00.md").exists());
+}
+
+#[test]
+fn clean_lists_the_sessions_before_asking() {
+    let home = store_with_mixed_sessions();
+    caleb(home.path())
+        .arg("--clean")
+        .write_stdin("n\n")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("2026-05-30_09-00.md"))
+        .stdout(predicates::str::contains("2026-05-29_08-00.md"))
+        .stdout(predicates::str::contains("Delete 2 sessions? [y/N]"))
+        .stdout(predicates::str::contains("2026-05-31_14-30.md").not());
+}
+
+#[test]
+fn clean_deletes_nothing_when_the_answer_is_not_yes() {
+    let home = store_with_mixed_sessions();
+    let sessions = home.path().join("caleb");
+
+    for answer in ["n\n", "\n", "yep\n", ""] {
+        caleb(home.path())
+            .arg("--clean")
+            .write_stdin(answer)
+            .assert()
+            .success()
+            .stdout(predicates::str::contains("Cancelled"));
+
+        assert_eq!(
+            std::fs::read_dir(&sessions).unwrap().count(),
+            3,
+            "answer {answer:?} should leave every session in place"
+        );
+    }
+}
+
+#[test]
+fn clean_says_so_when_there_is_nothing_to_clean() {
+    let home = tempfile::tempdir().unwrap();
+    let sessions = home.path().join("caleb");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(
+        sessions.join("2026-05-31_14-30.md"),
+        "# Session 2026-05-31 14:30\n\n## Active\n\n- [ ] open one\n",
+    )
+    .unwrap();
+
+    caleb(home.path())
+        .arg("--clean")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("No sessions to clean"));
+    assert!(sessions.join("2026-05-31_14-30.md").exists());
+}
+
+#[test]
+fn clean_must_be_used_on_its_own() {
+    let home = tempfile::tempdir().unwrap();
+    for other in ["--list", "--resume"] {
+        caleb(home.path())
+            .args(["--clean", other])
+            .assert()
+            .failure()
+            .stderr(predicates::str::contains("cannot be used with"));
+    }
+}
+
+#[test]
+fn help_documents_clean() {
+    let home = tempfile::tempdir().unwrap();
+    caleb(home.path())
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("--clean"))
+        .stdout(predicates::str::contains("no open tasks"));
+}
+
+#[test]
+fn clean_says_session_in_the_singular() {
+    let home = tempfile::tempdir().unwrap();
+    let sessions = home.path().join("caleb");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(
+        sessions.join("2026-05-30_09-00.md"),
+        "# Session 2026-05-30 09:00\n\n## Completed\n\n- [x] done\n",
+    )
+    .unwrap();
+
+    caleb(home.path())
+        .arg("--clean")
+        .write_stdin("y\n")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("Delete 1 session? [y/N]"))
+        .stdout(predicates::str::contains("Deleted 1 session."));
 }

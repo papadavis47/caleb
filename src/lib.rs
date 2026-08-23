@@ -8,6 +8,7 @@
 //! and save, and `ui`/`app`/`picker`/`tui` sit at the terminal edge.
 
 pub mod app;
+pub mod clean;
 pub mod markdown;
 pub mod model;
 pub mod picker;
