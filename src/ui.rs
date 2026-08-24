@@ -588,15 +588,109 @@ mod tests {
         assert_eq!(buf[(20u16, 3u16)].fg, Color::Indexed(240));
     }
 
+    /// Keys the help overlay documents under these headings are the ones the
+    /// status bar is expected to carry. `Navigation` and `Mouse` are excluded:
+    /// the bar has never listed arrows or clicks.
+    const ACTION_SECTIONS: &[&str] = &["Editing", "App"];
+
+    /// Overlay keys the status bar deliberately leaves out, with the reason.
+    /// A key added to the overlay must either reach the bar or be named here —
+    /// that choice is the point of the cross-check below.
+    const STATUS_BAR_OMITS: &[&str] = &[
+        // Contextual rather than a standing action: what Esc dismisses depends
+        // on which overlay is up, and the bar is hidden while one is.
+        "Esc",
+    ];
+
+    /// The overlay's key column for every entry under `ACTION_SECTIONS`.
+    ///
+    /// The overlay's shape is fixed: a section heading starts at column 1, an
+    /// entry's key starts at column 3 and its description at column 16, and a
+    /// wrapped description line leaves the key column blank.
+    fn overlay_action_keys() -> Vec<String> {
+        let mut keys = Vec::new();
+        let mut in_section = false;
+        for line in HELP_LINES {
+            let col = |n: usize| line.chars().nth(n);
+            if col(0) == Some(' ') && col(1).is_some_and(|c| c != ' ') {
+                let heading: String = line.trim().to_string();
+                in_section = ACTION_SECTIONS.contains(&heading.as_str());
+                continue;
+            }
+            if !in_section || col(3).is_none_or(|c| c == ' ') {
+                continue;
+            }
+            keys.push(
+                line.chars()
+                    .skip(3)
+                    .take(13)
+                    .collect::<String>()
+                    .trim()
+                    .to_string(),
+            );
+        }
+        keys
+    }
+
+    /// How the overlay spells a key versus how the bar does. The bar is one
+    /// line, so it carries the shortest unambiguous form.
+    fn as_status_bar_spells_it(overlay_key: &str) -> &str {
+        match overlay_key {
+            "space / x" => "space",
+            "Shift+J / K" => "J/K",
+            other => other,
+        }
+    }
+
+    /// The keys the rendered bar actually offers. Entries are separated by two
+    /// spaces and each begins with its key, so this reads them back out rather
+    /// than substring-matching — `contains("d")` would match `add`.
+    fn status_bar_keys(status: &str) -> Vec<String> {
+        status
+            .trim()
+            .split("  ")
+            .filter(|entry| !entry.trim().is_empty())
+            .filter_map(|entry| entry.split_whitespace().next())
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn the_status_bar_renders_in_full() {
+        // 80 columns: the bar is 72 wide. Narrower terminals truncate it, which
+        // is a separate concern from what it says.
+        let buf = render(80, 10, &base(&[], &[]));
+        assert_eq!(row(&buf, 9).trim_end(), STATUS_TEXT.trim_end());
+    }
+
     #[test]
     fn status_bar_lists_every_binding() {
-        // 80 columns: the bar is 72 wide, and this test is about what it
-        // says, not about what a narrower terminal truncates.
+        // Derived from the help overlay rather than compared against a second
+        // hardcoded copy of the bar: a copy is edited in the same breath as the
+        // original, so it cannot notice a key that was never added here. This
+        // caught `p` reaching the overlay while the bar still omitted it.
         let buf = render(80, 10, &base(&[], &[]));
-        assert_eq!(
-            row(&buf, 9).trim_end(),
-            " a add  d delete  space toggle  J/K move  p pull  s save  q quit  ? help"
+        let status = row(&buf, 9);
+        let offered = status_bar_keys(&status);
+
+        let documented = overlay_action_keys();
+        assert!(
+            !documented.is_empty(),
+            "parsed no keys out of the overlay — the parser and HELP_LINES have drifted"
         );
+
+        for key in documented {
+            if STATUS_BAR_OMITS.contains(&key.as_str()) {
+                continue;
+            }
+            let expected = as_status_bar_spells_it(&key);
+            assert!(
+                offered.iter().any(|k| k == expected),
+                "the overlay documents {key:?} but the status bar does not offer it \
+                 (bar keys: {offered:?}). Add it to STATUS_TEXT, or to \
+                 STATUS_BAR_OMITS with the reason."
+            );
+        }
     }
 
     #[test]
