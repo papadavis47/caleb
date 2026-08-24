@@ -140,10 +140,12 @@ same as an out-of-range or already-completed one.
 ### `src/session.rs` — the operation
 
 ```rust
-/// Move the tasks at `indices` out of `source.active` and into
-/// `target.active`, marking each completed in `source`. Returns how many
-/// moved. Out-of-range indices are ignored, as in `toggle` and `delete`.
-pub fn pull_tasks(source: &mut Session, target: &mut Session, indices: &[usize]) -> usize;
+/// Move the named tasks out of `source.active` and into `target.active`,
+/// marking each completed in `source`. Returns how many moved. Out-of-range,
+/// already-done, or text-mismatched entries are ignored, as in `toggle` and
+/// `delete` — the text travels alongside each index so a stale one is
+/// distinguishable from a still-valid one.
+pub fn pull_tasks(source: &mut Session, target: &mut Session, tasks: &[(usize, String)]) -> usize;
 
 /// Load `source_name`, apply `pull_tasks`, then save the target and the
 /// source in that order.
@@ -151,7 +153,7 @@ pub fn pull_from_file(
     dir: &Path,
     source_name: &str,
     target: &mut Session,
-    indices: &[usize],
+    tasks: &[(usize, String)],
 ) -> Result<usize, PullError>;
 
 #[derive(Debug, Error)]
@@ -165,12 +167,12 @@ pub enum PullError {
 }
 ```
 
-`pull_tasks` walks `indices` in descending order so each removal cannot shift
-the ones still to come. It de-duplicates and sorts the incoming indices itself
-rather than trusting the caller. Both sessions are marked `dirty`; `save`
-clears the flag as usual. It lives beside `resume`, which is the same kind of
-two-file operation, and it keeps session mutation out of the terminal-edge
-modules, as the crate docs require.
+`pull_tasks` walks the indices in descending order so each removal cannot
+shift the ones still to come. It de-duplicates and sorts them itself rather
+than trusting the caller. Both sessions are marked `dirty`; `save` clears the
+flag as usual. It lives beside `resume`, which is the same kind of two-file
+operation, and it keeps session mutation out of the terminal-edge modules, as
+the crate docs require.
 
 No text de-duplication against the target's existing tasks. Pulling the same
 session twice cannot re-offer the same task — it is checked off after the first
@@ -194,8 +196,10 @@ pub struct PullState {
 /// A confirmed pull: which session, and which of its open tasks.
 pub struct Pulled {
     pub source: String,
-    /// Indices into the source's `active`, ascending and unique.
-    pub indices: Vec<usize>,
+    /// The chosen entries of the source's `open` list, ascending and unique —
+    /// text travels with each index so a stale one can be told apart from a
+    /// still-valid one.
+    pub tasks: Vec<(usize, String)>,
 }
 
 /// What a key did to the state.
@@ -247,7 +251,7 @@ applies the result:
 ```rust
 Action::Pull => {
     if let Some(p) = pull::run(&dir, tui, self.palette, &self.session.filename)? {
-        let n = session::pull_from_file(&dir, &p.source, &mut self.session, &p.indices)?;
+        let n = session::pull_from_file(&dir, &p.source, &mut self.session, &p.tasks)?;
         self.focused = Pane::Active;
         // saturating: `pull_from_file` reports what actually moved, which can
         // be fewer than were asked for if the source changed underneath.
