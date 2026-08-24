@@ -152,12 +152,22 @@ pub fn resume(dir: &Path, original: &str, ts: Timestamp) -> Result<Session, Resu
     Ok(loaded)
 }
 
-/// Move the tasks at `indices` out of `source.active` and into
+/// Move the tasks named by `tasks` out of `source.active` and into
 /// `target.active`, leaving a completed copy behind in `source.completed`.
 /// Returns how many actually moved.
 ///
-/// `indices` may arrive unsorted, duplicated, or out of range; the caller is
-/// a picker, not a proof. An index naming a task that is already `done` is
+/// Each entry is `(index, text)` rather than a bare index because the index
+/// was computed against a snapshot the picker took at `p`-press time —
+/// position alone is not proof the task still sitting at that position is the
+/// one the user chose. If the source file changed on disk in the meantime (a
+/// second `caleb` instance, a hand edit while the picker was on screen),
+/// `source.active[index]` may hold different text by the time this runs; an
+/// entry whose text no longer matches is skipped, exactly like an
+/// out-of-range or already-`done` one, rather than moving whatever now sits
+/// there.
+///
+/// `tasks` may arrive unsorted, duplicated, or out of range; the caller is a
+/// picker, not a proof. An entry naming a task that is already `done` is
 /// ignored too — `markdown::parse` files tasks by the heading above them, not
 /// by their checkbox, so `active` can hold a hand-written `- [x]`.
 ///
@@ -166,11 +176,16 @@ pub fn resume(dir: &Path, original: &str, ts: Timestamp) -> Result<Session, Resu
 /// first would leave every later index pointing at the wrong task. The
 /// collected tasks are then replayed in ascending order so the target reads in
 /// the source's original order.
-pub fn pull_tasks(source: &mut Session, target: &mut Session, indices: &[usize]) -> usize {
-    let mut wanted: Vec<usize> = indices
+pub fn pull_tasks(source: &mut Session, target: &mut Session, tasks: &[(usize, String)]) -> usize {
+    let mut wanted: Vec<usize> = tasks
         .iter()
-        .copied()
-        .filter(|&i| source.active.get(i).is_some_and(|t| !t.done))
+        .filter(|(i, text)| {
+            source
+                .active
+                .get(*i)
+                .is_some_and(|t| !t.done && &t.text == text)
+        })
+        .map(|(i, _)| *i)
         .collect();
     wanted.sort_unstable();
     wanted.dedup();
@@ -200,8 +215,8 @@ pub fn pull_tasks(source: &mut Session, target: &mut Session, indices: &[usize])
     moved
 }
 
-/// Load `source_name`, move the tasks at `indices` into `target`, and write
-/// both files.
+/// Load `source_name`, move the named tasks into `target`, and write both
+/// files.
 ///
 /// The write order is the whole point. The target is saved *first*, so a
 /// failure between the two writes leaves the tasks open in both files —
@@ -213,14 +228,14 @@ pub fn pull_from_file(
     dir: &Path,
     source_name: &str,
     target: &mut Session,
-    indices: &[usize],
+    tasks: &[(usize, String)],
 ) -> Result<usize, PullError> {
     let mut loaded = Session::load(dir, source_name).map_err(|e| PullError::LoadSource {
         name: source_name.to_string(),
         source: e,
     })?;
 
-    let moved = pull_tasks(&mut loaded, target, indices);
+    let moved = pull_tasks(&mut loaded, target, tasks);
     if moved == 0 {
         return Ok(0);
     }
@@ -573,7 +588,7 @@ mod tests {
         let mut source = crate::test_util::session_with(&["keep me", "take me"]);
         let mut target = crate::test_util::session_with(&["already here"]);
 
-        let moved = pull_tasks(&mut source, &mut target, &[1]);
+        let moved = pull_tasks(&mut source, &mut target, &[(1, "take me".to_string())]);
 
         assert_eq!(moved, 1);
         assert_eq!(source.active.len(), 1);
@@ -594,7 +609,15 @@ mod tests {
         let mut source = crate::test_util::session_with(&["zero", "one", "two", "three"]);
         let mut target = crate::test_util::session_with(&[]);
 
-        let moved = pull_tasks(&mut source, &mut target, &[3, 0, 3]);
+        let moved = pull_tasks(
+            &mut source,
+            &mut target,
+            &[
+                (3, "three".to_string()),
+                (0, "zero".to_string()),
+                (3, "three".to_string()),
+            ],
+        );
 
         assert_eq!(moved, 2, "the duplicate index counts once");
         let text: Vec<&str> = target.active.iter().map(|t| t.text.as_str()).collect();
@@ -610,7 +633,10 @@ mod tests {
         let mut source = crate::test_util::session_with(&["only"]);
         let mut target = crate::test_util::session_with(&[]);
 
-        assert_eq!(pull_tasks(&mut source, &mut target, &[9]), 0);
+        assert_eq!(
+            pull_tasks(&mut source, &mut target, &[(9, "whatever".to_string())]),
+            0
+        );
         assert_eq!(source.active.len(), 1);
         assert!(target.active.is_empty());
         assert!(!source.dirty, "a no-op must not mark anything unsaved");
@@ -639,11 +665,43 @@ mod tests {
         source.dirty = false;
         let mut target = crate::test_util::session_with(&[]);
 
-        assert_eq!(pull_tasks(&mut source, &mut target, &[0, 1]), 1);
+        assert_eq!(
+            pull_tasks(
+                &mut source,
+                &mut target,
+                &[
+                    (0, "open one".to_string()),
+                    (1, "secretly done".to_string())
+                ],
+            ),
+            1
+        );
         assert_eq!(target.active.len(), 1);
         assert_eq!(target.active[0].text, "open one");
         assert_eq!(source.active.len(), 1, "the done one stays put");
         assert_eq!(source.active[0].text, "secretly done");
+    }
+
+    #[test]
+    fn pull_tasks_skips_a_stale_index_whose_text_no_longer_matches() {
+        // The index was computed against a snapshot taken when `p` was
+        // pressed. If the file changed underneath before the reload — another
+        // `caleb` instance, or a hand edit — position 0 might no longer hold
+        // the task the user picked. Position alone must not be trusted.
+        let mut source = crate::test_util::session_with(&["changed underneath", "still here"]);
+        let mut target = crate::test_util::session_with(&[]);
+
+        let moved = pull_tasks(
+            &mut source,
+            &mut target,
+            &[(0, "stale text".to_string()), (1, "still here".to_string())],
+        );
+
+        assert_eq!(moved, 1, "only the entry whose text still matches moves");
+        assert_eq!(source.active.len(), 1, "the stale one is left in place");
+        assert_eq!(source.active[0].text, "changed underneath");
+        assert_eq!(target.active.len(), 1);
+        assert_eq!(target.active[0].text, "still here");
     }
 
     #[test]
@@ -656,7 +714,13 @@ mod tests {
         old.save(dir.path()).unwrap();
 
         let mut current = create_new(dir.path(), ts_at(16, 45)).unwrap();
-        let moved = pull_from_file(dir.path(), &old.filename, &mut current, &[0]).unwrap();
+        let moved = pull_from_file(
+            dir.path(),
+            &old.filename,
+            &mut current,
+            &[(0, "carry me".to_string())],
+        )
+        .unwrap();
         assert_eq!(moved, 1);
 
         let source = Session::load(dir.path(), &old.filename).unwrap();
@@ -684,7 +748,13 @@ mod tests {
         old.save(dir.path()).unwrap();
 
         let mut current = create_new(dir.path(), ts_at(16, 45)).unwrap();
-        pull_from_file(dir.path(), &old.filename, &mut current, &[0, 1]).unwrap();
+        pull_from_file(
+            dir.path(),
+            &old.filename,
+            &mut current,
+            &[(0, "one".to_string()), (1, "two".to_string())],
+        )
+        .unwrap();
 
         let on_disk = std::fs::read_to_string(dir.path().join(&old.filename)).unwrap();
         assert_eq!(crate::markdown::count_tasks(&on_disk).open, 0, "{on_disk}");
@@ -700,7 +770,13 @@ mod tests {
         let mut current = create_new(dir.path(), ts_at(16, 45)).unwrap();
         assert!(!dir.path().join(&current.filename).exists());
 
-        pull_from_file(dir.path(), &old.filename, &mut current, &[0]).unwrap();
+        pull_from_file(
+            dir.path(),
+            &old.filename,
+            &mut current,
+            &[(0, "carry me".to_string())],
+        )
+        .unwrap();
         assert!(dir.path().join(&current.filename).exists());
     }
 
@@ -709,7 +785,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut current = create_new(dir.path(), ts_at(16, 45)).unwrap();
 
-        let err = pull_from_file(dir.path(), "vanished.md", &mut current, &[0]).unwrap_err();
+        let err = pull_from_file(
+            dir.path(),
+            "vanished.md",
+            &mut current,
+            &[(0, "whatever".to_string())],
+        )
+        .unwrap_err();
         assert!(matches!(err, PullError::LoadSource { .. }));
         assert!(err.to_string().contains("vanished.md"));
     }
@@ -722,7 +804,12 @@ mod tests {
         let mut current = create_new(dir.path(), ts_at(16, 45)).unwrap();
 
         assert!(matches!(
-            pull_from_file(dir.path(), "bad.md", &mut current, &[0]),
+            pull_from_file(
+                dir.path(),
+                "bad.md",
+                &mut current,
+                &[(0, "whatever".to_string())],
+            ),
             Err(PullError::LoadSource { .. })
         ));
     }

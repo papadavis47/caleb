@@ -125,6 +125,16 @@ do not roll back, since a rollback can only lose more.
 A pull is therefore a save point for the current session: in-progress edits are
 flushed along with the pulled tasks. This is stated in the help overlay.
 
+Step 2 does not trust the stage-1/stage-2 indices on position alone. They were
+computed against the file contents `picker::scan` captured when `p` was
+pressed, and the source is reloaded from disk fresh in step 1 — if the file
+changed in between (a second `caleb` instance, or a hand edit while the picker
+was on screen), an index could now point at a different task than the one the
+user saw and picked. Each selected entry therefore carries its captured text
+alongside its index, and the move verifies the two together before anything is
+taken: an index whose text no longer matches what is on disk is skipped, the
+same as an out-of-range or already-completed one.
+
 ## Code shape
 
 ### `src/session.rs` — the operation

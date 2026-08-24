@@ -37,8 +37,14 @@ pub enum Stage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pulled {
     pub source: String,
-    /// Indices into the source's `active` list, ascending and unique.
-    pub indices: Vec<usize>,
+    /// The selected entries of the chosen candidate's `open` list, ascending
+    /// by index. The text travels along with the index rather than being
+    /// dropped here: `session::pull_tasks` reloads the source fresh from disk,
+    /// and by then the index alone is not proof the task at that position is
+    /// still the one shown on screen when the user picked it — the source
+    /// file may have changed underneath in the meantime. Carrying the text
+    /// lets the reload verify before it moves anything.
+    pub tasks: Vec<(usize, String)>,
 }
 
 /// What a key did.
@@ -174,19 +180,19 @@ impl PullState {
                 let Some(candidate) = self.current() else {
                     return Step::Stay;
                 };
-                let indices: Vec<usize> = candidate
+                let tasks: Vec<(usize, String)> = candidate
                     .open
                     .iter()
                     .zip(&self.selected)
                     .filter(|&(_, &picked)| picked)
-                    .map(|((i, _), _)| *i)
+                    .map(|(entry, _)| entry.clone())
                     .collect();
-                if indices.is_empty() {
+                if tasks.is_empty() {
                     return Step::Stay;
                 }
                 return Step::Pull(Pulled {
                     source: candidate.name.clone(),
-                    indices,
+                    tasks,
                 });
             }
             _ => {}
@@ -482,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn enter_pulls_the_selected_indices_in_ascending_order() {
+    fn enter_pairs_each_selected_index_with_its_captured_text() {
         let mut s = state();
         s.on_key(KeyCode::Enter);
         s.on_key(KeyCode::Char(' ')); // clear index 0
@@ -491,7 +497,27 @@ mod tests {
             step,
             Step::Pull(Pulled {
                 source: "2026-05-31_14-30.md".to_string(),
-                indices: vec![1],
+                tasks: vec![(1, "beta".to_string())],
+            })
+        );
+    }
+
+    #[test]
+    fn enter_produces_index_text_pairs_matching_every_selected_entry() {
+        // A middle deselection, so the surviving pairs must still line up
+        // with their own indices and text rather than being renumbered.
+        let three = "# Session 2026-05-31 14:30\n\n## Active\n\n\
+            - [ ] alpha\n- [ ] beta\n- [ ] gamma\n";
+        let mut s = PullState::new(&[entry("2026-05-31_14-30.md", three)], "current.md");
+        s.on_key(KeyCode::Enter);
+        s.on_key(KeyCode::Char('j')); // cursor -> beta
+        s.on_key(KeyCode::Char(' ')); // deselect beta
+        let step = s.on_key(KeyCode::Enter);
+        assert_eq!(
+            step,
+            Step::Pull(Pulled {
+                source: "2026-05-31_14-30.md".to_string(),
+                tasks: vec![(0, "alpha".to_string()), (2, "gamma".to_string())],
             })
         );
     }

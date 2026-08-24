@@ -147,7 +147,13 @@ fn pulled_tasks_cross_the_file_boundary_and_are_not_offered_twice() {
     old.save(dir.path()).unwrap();
 
     let mut current = session::create_new(dir.path(), ts(16, 45)).unwrap();
-    let moved = session::pull_from_file(dir.path(), &old.filename, &mut current, &[0, 1]).unwrap();
+    let moved = session::pull_from_file(
+        dir.path(),
+        &old.filename,
+        &mut current,
+        &[(0, "carry me".to_string()), (1, "and me".to_string())],
+    )
+    .unwrap();
     assert_eq!(moved, 2);
 
     // Both files, re-read from disk through the public API.

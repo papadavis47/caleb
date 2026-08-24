@@ -194,6 +194,8 @@ show-all automatically rather than presenting an empty box. `Enter` or
 double-click opens the selection; `Esc` or `q` exits the program — it does
 **not** fall through to creating a new session.
 
+## Pull (`p`)
+
 `p` pulls open tasks out of a past session: they land open in the current
 session and completed in the source. `session::pull_from_file` saves the
 **target before the source** on purpose — a failure between the two writes

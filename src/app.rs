@@ -16,8 +16,9 @@ use thiserror::Error;
 
 /// Anything that can end the event loop early.
 ///
-/// Draw and read failures are `io`; the exit-time autosave is its own variant
-/// so the message never blames the wrong subsystem.
+/// Draw and read failures are `io`; the exit-time autosave is its own variant,
+/// and a pull failure gets its own too, so the message never blames the wrong
+/// subsystem.
 #[derive(Debug, Error)]
 pub enum RunError {
     #[error("terminal I/O failed: {0}")]
@@ -428,7 +429,7 @@ impl App {
 
         let dir = self.storage_dir.clone();
         let moved =
-            session::pull_from_file(&dir, &pulled.source, &mut self.session, &pulled.indices)?;
+            session::pull_from_file(&dir, &pulled.source, &mut self.session, &pulled.tasks)?;
 
         // Land the cursor on the first task that arrived. `moved` is what
         // actually moved, which can be fewer than were asked for, so the
