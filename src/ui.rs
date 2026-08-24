@@ -63,7 +63,8 @@ impl<K: Copy + PartialEq> ClickTracker<K> {
     }
 }
 
-const STATUS_TEXT: &str = " a add  d delete  space toggle  J/K move  s save  q quit  ? help";
+const STATUS_TEXT: &str =
+    " a add  d delete  space toggle  J/K move  p pull  s save  q quit  ? help";
 
 /// Heavy verticals span terminal cell boundaries more reliably than `│`,
 /// while light horizontals preserve the existing pane appearance.
@@ -589,10 +590,12 @@ mod tests {
 
     #[test]
     fn status_bar_lists_every_binding() {
-        let buf = render(70, 10, &base(&[], &[]));
+        // 80 columns: the bar is 72 wide, and this test is about what it
+        // says, not about what a narrower terminal truncates.
+        let buf = render(80, 10, &base(&[], &[]));
         assert_eq!(
             row(&buf, 9).trim_end(),
-            " a add  d delete  space toggle  J/K move  s save  q quit  ? help"
+            " a add  d delete  space toggle  J/K move  p pull  s save  q quit  ? help"
         );
     }
 
