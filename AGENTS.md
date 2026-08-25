@@ -6,7 +6,8 @@ Quick orientation for agents working on this repo.
 
 `caleb` — full-screen TUI to-do tracker for coding sessions. One file per
 session, persisted as GitHub-flavored markdown under `$XDG_DATA_HOME/caleb`
-(default `~/.local/share/caleb`). Rust 1.97, edition 2024.
+(default `~/.local/share/caleb`). Edition 2024, MSRV 1.90 (pinned by
+`rust-version` in `Cargo.toml` and checked by a CI job).
 
 Named after Caleb Smith in *Ex Machina*. Built as a learning exercise
 focused on (in priority order):
@@ -44,10 +45,15 @@ else. `learning/` is untracked personal material; ignore it unless asked.
 
 ## Status
 
-v1 complete. 130+ tests pass under `cargo test` (unit, integration, and
-doctests). Smoke-tested through
-a pty end-to-end: create session → add tasks → toggle → save → quit → `-r` →
-rename to now() → load → re-save.
+v0.4.0. 246 tests pass under `cargo test` — 218 unit, 17 in `tests/cli.rs`,
+6 in `tests/roundtrip.rs`, 5 doctests. CI runs `cargo fmt --check`,
+`cargo clippy --all-targets -- -D warnings`, `cargo test --all-targets`,
+`cargo test --doc`, and an MSRV `cargo check` on 1.90.
+
+Smoke-tested through a pty end-to-end, one script per screen: the session
+(create → add tasks → toggle → save → quit → `-r` → rename to now() → load →
+re-save), the picker (delete, filtering, preview), and the pull flow (both
+stages).
 
 ## Layout
 
@@ -193,6 +199,17 @@ unfinished task; `a` toggles show-all. An empty filtered list flips to
 show-all automatically rather than presenting an empty box. `Enter` or
 double-click opens the selection; `Esc` or `q` exits the program — it does
 **not** fall through to creating a new session.
+
+Keys: `j/k` move, `Enter` open, `d` delete (raises a `y/N` prompt naming the
+session; the mouse goes inert until it is answered), `p` toggle the preview
+pane, `Ctrl-D`/`Ctrl-U` scroll the preview half a page, `a` show all, `Esc`
+cancel.
+
+The preview shows the highlighted session's file beside the list, wrapping
+long task lines with a hanging indent so a wrapped task still reads as one
+item. The list keeps a fixed 44 columns; below 80 columns the preview is
+dropped and the list runs full width. `Entry` carries the contents `scan`
+already read, so the preview costs no extra I/O.
 
 ## Pull (`p`)
 
