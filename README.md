@@ -20,8 +20,6 @@ Named for the character **Caleb Smith**, played by [Domhnall Gleeson](https://en
 
 ---
 
-&nbsp;
-
 **caleb** is a TUI task manager for coding sessions. One file per
 session, stored as plain GitHub-flavored markdown so it's useful in any
 editor or renderer. Linux, terminal, mouse-aware.

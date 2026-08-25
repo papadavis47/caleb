@@ -594,7 +594,7 @@ fn draw(frame: &mut Frame, view: &PickerView) {
         {
             // No point advertising a key that does nothing at this width.
             let hint = if preview_fits(area.width) {
-                " j/k move   Enter open   d delete   p preview   a show all   Esc cancel"
+                " j/k move   Enter open   d delete   p toggle preview   a show all   Esc cancel"
             } else {
                 " j/k move   Enter open   d delete   a show all   Esc cancel"
             };
@@ -1065,7 +1065,7 @@ mod tests {
         let visible = vec![&e];
         let buf = render(100, 12, &view(&visible));
         assert!(
-            row(&buf, 11).contains("p preview"),
+            row(&buf, 11).contains("p toggle preview"),
             "status: {:?}",
             row(&buf, 11)
         );
