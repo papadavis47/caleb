@@ -12,9 +12,15 @@ Named for the character **Caleb Smith**, played by [Domhnall Gleeson](https://en
   <img src="assets/caleb.jpg" alt="Caleb Smith in Ex Machina" width="700">
 </p>
 
+> Header image: _Ex Machina_ (2014), dir. Alex Garland — stills by Colin
+> Field / Aimee Spinks. © Universal Pictures International / A24. Not
+> covered by this project's license.
+
 <br>
 
 ---
+
+&nbsp;
 
 **caleb** is a TUI to-do list for coding sessions. One file per
 session, stored as plain GitHub-flavored markdown so it's useful in any
