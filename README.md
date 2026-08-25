@@ -1,8 +1,10 @@
+<img src="./assets/logo-mark-dark.svg" width="128" alt="caleb logo">
+
 # caleb
 
 Named for the character Caleb Smith, played by Domhnall Gleeson, in
 [Ex Machina](<https://en.wikipedia.org/wiki/Ex_Machina_(film)>) — A film by
-Alex Garland.
+[Alex Garland](https://en.wikipedia.org/wiki/Alex_Garland).
 
 <br>
 
