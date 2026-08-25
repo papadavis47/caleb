@@ -2,7 +2,7 @@
 
 # caleb
 
-Named for the character Caleb Smith, played by Domhnall Gleeson, in
+Named for the character **Caleb Smith**, played by [Domhnall Gleeson](https://en.wikipedia.org/wiki/Domhnall_Gleeson), in
 [Ex Machina](<https://en.wikipedia.org/wiki/Ex_Machina_(film)>) — A film by
 [Alex Garland](https://en.wikipedia.org/wiki/Alex_Garland).
 
@@ -16,7 +16,7 @@ Named for the character Caleb Smith, played by Domhnall Gleeson, in
 
 ---
 
-**caleb** is a simple TUI to-do list for coding sessions. One file per
+**caleb** is a TUI to-do list for coding sessions. One file per
 session, stored as plain GitHub-flavored markdown so it's useful in any
 editor or renderer. Linux, terminal, mouse-aware.
 
@@ -30,6 +30,14 @@ editor or renderer. Linux, terminal, mouse-aware.
 │  a add  d delete  space toggle  J/K move  s save  q quit  ?   │
 ╰───────────────────────────────────────────────────────────────╯
 ```
+
+## Why on earth another to-do list?
+
+**Of all things, right?**
+
+Because it is a fun, personal Rust based project and it is useful to me. Maybe other people might find it useful and I offer it here in that spirit. That, plus I love a certain cool movie and I wanted a piece of software named after a character in it. This fit the bill :fire:
+
+Using this thing is fun and helpful for me, no doubt :100:
 
 ## Install
 
