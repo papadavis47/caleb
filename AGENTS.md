@@ -45,7 +45,7 @@ else. `learning/` is untracked personal material; ignore it unless asked.
 
 ## Status
 
-v0.4.0. 246 tests pass under `cargo test` — 218 unit, 17 in `tests/cli.rs`,
+v0.4.1. 246 tests pass under `cargo test` — 218 unit, 17 in `tests/cli.rs`,
 6 in `tests/roundtrip.rs`, 5 doctests. CI runs `cargo fmt --check`,
 `cargo clippy --all-targets -- -D warnings`, `cargo test --all-targets`,
 `cargo test --doc`, and an MSRV `cargo check` on 1.90.
