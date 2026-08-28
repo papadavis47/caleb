@@ -1,4 +1,7 @@
-<img src="./assets/logo-mark-dark.svg" width="128" alt="caleb logo">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./assets/logo-mark-dark.svg">
+  <img src="./assets/logo-mark-light.svg" width="128" alt="caleb logo">
+</picture>
 
 # caleb
 
