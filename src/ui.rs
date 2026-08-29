@@ -97,8 +97,8 @@ impl Palette {
     pub fn new(color_enabled: bool) -> Self {
         if color_enabled {
             Self {
-                accent: Color::Indexed(40),
-                muted: Color::Indexed(240),
+                accent: Color::Indexed(33),
+                muted: Color::Indexed(245),
                 help: Color::Indexed(177),
                 warn: Color::Indexed(221),
                 color_enabled,
@@ -583,9 +583,10 @@ mod tests {
 
     #[test]
     fn focused_pane_uses_accent_and_unfocused_uses_muted() {
+        let palette = Palette::new(true);
         let buf = render(40, 10, &base(&[], &[]));
-        assert_eq!(buf[(0u16, 3u16)].fg, Color::Indexed(40));
-        assert_eq!(buf[(20u16, 3u16)].fg, Color::Indexed(240));
+        assert_eq!(buf[(0u16, 3u16)].fg, palette.accent);
+        assert_eq!(buf[(20u16, 3u16)].fg, palette.muted);
     }
 
     /// Keys the help overlay documents under these headings are the ones the
@@ -761,7 +762,7 @@ mod tests {
         s.overlay = Overlay::Input("x");
         let buf = render(40, 10, &s);
         // Field top-left corner: row 6, column 0.
-        assert_eq!(buf[(0u16, 6u16)].fg, Color::Indexed(40));
+        assert_eq!(buf[(0u16, 6u16)].fg, Palette::new(true).accent);
     }
 
     #[test]

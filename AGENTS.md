@@ -175,9 +175,11 @@ also report releases run every binding twice.
   `┃` verticals and matching mixed-weight corners. The heavier glyph avoids
   row-boundary gaps in terminal fonts.
 - **Color palette** lives in `ui::Palette`, 256-color indices only: `accent`
-  40 (a muted green) for the focused border and input box, `muted` 240 (dim
+  33 (deep blue) for the focused border and input box, `muted` 245 (dim
   gray) for unfocused panes, `help` 177 (orchid) for the help overlay, `warn`
   221 (gold) for the unsaved marker. Retuning the look = one line per slot.
+  `muted` is 245 rather than 240 because 33 is dark enough that 240 left the
+  focused/unfocused panes only 2:1 apart; 245 restores the gap to 3.6:1.
 - **2-row stride** — each task is a blank spacer row followed by a content
   row. Style the content `Line` inside the two-`Line` `ListItem`; do **not**
   use `List::highlight_style`, which would paint the spacer too.
