@@ -66,7 +66,7 @@ first = drain()
 assert "2026-05-31" in first, f"unfinished session should be listed:\n{first}"
 assert "2026-05-28" not in first, f"finished sessions start hidden:\n{first}"
 assert "d delete" in first, f"hint line should advertise delete:\n{first}"
-assert "p preview" in first, f"hint line should advertise the preview:\n{first}"
+assert "p toggle preview" in first, f"hint line should advertise the preview:\n{first}"
 assert "alphatask" in first, f"preview should show the highlighted file:\n{first}"
 
 # --- delete -------------------------------------------------------------
@@ -111,7 +111,7 @@ assert "task00" in back, f"'p' should bring it back:\n{back}"
 fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 70, 0, 0))
 narrow = drain()
 assert "task00" not in narrow, f"70 columns is too narrow for a preview:\n{narrow}"
-assert "p preview" not in narrow, f"nor for its hint:\n{narrow}"
+assert "toggle preview" not in narrow, f"nor for its hint:\n{narrow}"
 assert "0 open / 40 total" in narrow, f"the list must remain:\n{narrow}"
 
 send(["q"])
