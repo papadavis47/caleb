@@ -189,6 +189,10 @@ text never splits.
   Bold, dim, reverse, and strike-through are kept, so the cursor stays
   visible without color.
 
+The chrome uses four 256-color slots: blue `33` for the focused pane border
+and the add-task field, dim gray `245` for unfocused panes, orchid `177` for
+the help overlay, and gold `221` for the unsaved marker.
+
 ## Platform
 
 Linux only. macOS/BSD might work but aren't tested.
